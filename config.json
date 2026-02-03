@@ -1,0 +1,19 @@
+{
+    "callsign": "LucasZ",
+    "color": "#FFCC11",
+    "udp_port": 50050,
+    "broadcast_ip": "10.147.17.255",
+    "map_offset_x": 723,
+    "map_offset_y": 199,
+    "map_width": 818,
+    "map_height": 818,
+    "activation_key": "m",
+    "debug_mode": false,
+    "timer_interval": 15,
+    "unit_is_kts": true,
+    "trail_duration": 180,
+    "enable_map_overlay": true,
+    "enable_web_map": true,
+    "disable_lan_broadcast": false,
+    "web_marker_scale": 2.3
+}

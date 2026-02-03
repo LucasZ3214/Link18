@@ -1,0 +1,7 @@
+PyQt6
+requests
+pynput
+numpy
+Pillow
+opencv-python
+mss

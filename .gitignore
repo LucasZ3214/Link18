@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+env/
+
+# IDEs
+.idea/
+.vscode/
+.stfolder/
+
+# Build artifacts
+build/
+dist/
+*.spec
+
+# Link18 Release artifacts
+*.zip
+*.exe
+Link18_Release/
+
+# Debug and Test specific
+debug_*.png
+debug_*.jpg
+debug_*.py
+scrape_vehicles.py
+WarThunder-localhost-documentation-master/
+Gamechat/
+Hudmsg/
+Indicators/
+MapObjects/
+Mapinfo/
+Mission/
+State/
+
+# Logs and temp
+*.log
