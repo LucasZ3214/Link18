@@ -107,11 +107,13 @@ class NetworkReceiver(QThread):
                 print(f"UDP Recv Error: {e}")
                 time.sleep(1)
 
-class OverlayWindow(QMainWindow):
+print("Version 1.3.1")
+print("----------------------------------------------------------------")
+
+class ControllerWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.config = CONFIG # Access global config
-        
+        self.setWindowTitle("Link18 Tactical Controller v1.3.1")       
         # Window setup for transparent overlay
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint |
@@ -132,7 +134,8 @@ class OverlayWindow(QMainWindow):
         self.airfields = [] # List of airfield locations
         self.shared_airfields = {} # Airfields shared by other players
         self.airfields_broadcasted = False # Track if we've broadcasted airfields this session
-        self.pois = [] # List of points of interest
+        self.pois = [] # List of points of interest (Game Objects)
+        self.user_pois = [] # List of user-created POIs (Web/Shared)
         self.shared_pois = {} # POIs shared by other players
         self.pois_broadcasted = False # Track if we've broadcasted POIs this session
         self.team_chat_messages = [] # Received team chat messages from network
@@ -486,12 +489,65 @@ class OverlayWindow(QMainWindow):
         return is_respawn
 
     def process_web_commands(self):
-        if 'commands' in web_server.SHARED_DATA:
-            while len(web_server.SHARED_DATA['commands']) > 0:
-                cmd = web_server.SHARED_DATA['commands'].pop(0)
-                if cmd.get('type') == 'planning_update':
-                    self.planning_waypoints = cmd.get('waypoints', [])
-                    print(f"[PLAN] Updated {len(self.planning_waypoints)} waypoints")
+        """Check for commands from the Web UI (runs on timer)"""
+        if not hasattr(self, 'shared_data') or 'commands' not in self.shared_data:
+            return
+
+        # Process all pending commands
+        while self.shared_data['commands']:
+            cmd = self.shared_data['commands'].pop(0)
+
+            # 1. Planning Actions
+            if cmd.get('type') == 'planning_update':
+                self.planning_waypoints = cmd.get('waypoints', [])
+                print(f"[PLAN] Updated {len(self.planning_waypoints)} waypoints")
+            
+            # 2. Formation Mode
+            elif cmd.get('action') == 'set_formation':
+                val = cmd.get('value', False)
+                self.show_formation_mode = val
+                print(f"[CMD] Formation Mode set to: {val}")
+                self.update()
+                
+            # 3. Create POI
+            elif cmd.get('action') == 'create_poi':
+                try:
+                    x = float(cmd.get('x', 0))
+                    y = float(cmd.get('y', 0))
+                    label = cmd.get('label', 'POI')
+                    
+                    # Add to local USER POIs list (Single Marker Mode - "Latest Only")
+                    self.user_pois = [{
+                        'x': x,
+                        'y': y,
+                        'label': label,
+                        'icon': 'poi',
+                        'color': CONFIG.get('color', '#FFCC11'),
+                        'owner': CONFIG.get('callsign', 'Me')
+                    }]
+                    print(f"[CMD] Created Web POI '{label}' at {x:.3f}, {y:.3f}")
+                    
+                    # FORCE SYNC: Update shared_data immediately
+                    if hasattr(self, 'shared_data'):
+                        pois_list = self.shared_data.get('pois', [])
+                        if not isinstance(pois_list, list): pois_list = []
+                        
+                        new_poi = {
+                            'x': x,
+                            'y': y,
+                            'icon': 'poi',
+                            'color': CONFIG.get('color', '#FFCC11'),
+                            'owner': CONFIG.get('callsign', 'Me')
+                        }
+                        pois_list.append(new_poi)
+                        self.shared_data['pois'] = pois_list
+                        
+                    print(f"[DEBUG] Local POIs: {len(self.pois)} | Shared: {len(self.shared_data.get('pois', []))}")
+                    self.update()
+                except Exception as e:
+                    print(f"[CMD] Failed to create POI: {e}")
+                    import traceback
+                    traceback.print_exc()
 
     def check_and_record_airfield(self, x, y):
         """Check if player is on an airfield and record altitude"""
@@ -521,9 +577,6 @@ class OverlayWindow(QMainWindow):
 
     def set_marker_visible(self):
         self.show_marker = True
-        # Broadcast airfields whenever overlay is shown
-        if self.airfields and not self.airfields_broadcasted:
-            self.broadcast_airfields()
         self.update()
 
     def set_marker_hidden(self):
@@ -535,18 +588,8 @@ class OverlayWindow(QMainWindow):
         self.overlay_enabled = enabled
         self.update()
         
-    def check_web_commands(self):
-        """Check for commands from the Web UI"""
-        if 'commands' in self.shared_data and self.shared_data['commands']:
-            # Process all pending commands
-            while self.shared_data['commands']:
-                cmd = self.shared_data['commands'].pop(0)
-                
-                if cmd.get('action') == 'set_formation':
-                    val = cmd.get('value', False)
-                    self.show_formation_mode = val
-                    print(f"[CMD] Formation Mode set to: {val}")
-                    self.update()
+    # check_web_commands DEPRECATED - Merged into process_web_commands
+
 
     def trigger_calibration(self):
         """Manually trigger map calibration"""
@@ -814,7 +857,7 @@ class OverlayWindow(QMainWindow):
             # --- Web Map Data Sync (CORRECT LOCATION) ---
             # This happens AFTER all airfield/poi processing is complete
             if hasattr(self, 'shared_data'):
-                self.check_web_commands() # Poll for commands
+                # self.check_web_commands() # DEPRECATED: Handled by process_web_commands timer
                 
                 self.shared_data['players'] = self.players.copy()
                 
@@ -836,6 +879,16 @@ class OverlayWindow(QMainWindow):
                 
                 # Merge local + shared POIs
                 pois_list = []
+                # 1. User POIs (Lower Priority)
+                for poi in getattr(self, 'user_pois', []):
+                    pois_list.append({
+                        'x': poi['x'],
+                        'y': poi['y'],
+                        'icon': poi.get('icon', 'poi'),
+                        'color': poi.get('color', '#FFCC11'),
+                        'owner': poi.get('owner', 'Me')
+                    })
+                # 2. Game POIs (Higher Priority)
                 for poi in self.pois:
                     pois_list.append({
                         'x': poi['x'],
@@ -920,6 +973,18 @@ class OverlayWindow(QMainWindow):
             
             # POIs (from network) - always sync
             pois_list = []
+            
+            # 1. User POIs (Web Markers) - "Less Priority" (Draw First / Background)
+            for poi in getattr(self, 'user_pois', []):
+                pois_list.append({
+                    'x': poi['x'],
+                    'y': poi['y'],
+                    'icon': poi.get('icon', 'poi'),
+                    'color': poi.get('color', '#FFCC11'),
+                    'owner': poi.get('owner', 'Me')
+                })
+
+            # 2. Game POIs (8111 API) - "Higher Priority" (Draw Top)
             for poi in getattr(self, 'pois', []):
                 pois_list.append({
                     'x': poi['x'],
@@ -1193,7 +1258,7 @@ class OverlayWindow(QMainWindow):
         # Broadcast POIs periodically (every 3s)
         current_time = time.time()
         last_poi_broadcast = getattr(self, 'last_poi_broadcast', 0)
-        if '_local' in self.players and self.pois and (current_time - last_poi_broadcast > 3.0):
+        if '_local' in self.players and (self.pois or getattr(self, 'user_pois', [])) and (current_time - last_poi_broadcast > 3.0):
             self.broadcast_pois()
             self.last_poi_broadcast = current_time
         
@@ -1258,27 +1323,33 @@ class OverlayWindow(QMainWindow):
 
     def broadcast_pois(self):
         """Broadcast all detected POIs to connected players"""
-        if not self.pois:
-            print("[BROADCAST] No POIs detected to broadcast")
+        # Combine lists for broadcasting
+        # Game POIs + User POIs
+        all_pois = list(self.pois) + list(getattr(self, 'user_pois', []))
+        
+        if not all_pois:
+            # print("[BROADCAST] No POIs detected to broadcast") # Too noisy
             return
             
-        print(f"[BROADCAST] Broadcasting {len(self.pois)} POI(s)...")
+        print(f"[BROADCAST] Broadcasting {len(all_pois)} POI(s)...")
         
-        for idx, poi in enumerate(self.pois):
-            packet_id = f"{CONFIG.get('callsign', 'Pilot')}_poi_{idx}"
+        for idx, poi in enumerate(all_pois):
+            # Use stable ID based on coordinates to differentiate (idx is unstable if list changes)
+            stable_suffix = f"{poi['x']:.3f}_{poi['y']:.3f}"
+            packet_id = f"{CONFIG.get('callsign', 'Pilot')}_poi_{stable_suffix}"
             
             packet = {
                 'id': packet_id,
-                'type': 'point_of_interest',
+                'type': 'point_of_interest', # Receivers look for this type
                 'sender': CONFIG.get('callsign', 'Pilot'),
                 'x': poi['x'],
                 'y': poi['y'],
-                'color': poi['color'].name(),
-                'icon': poi['icon'],
-                'callsign': CONFIG.get('callsign', 'Unknown'),
-                'player_color': CONFIG.get('color', '#FF0000')
+                'color': poi['color'].name() if isinstance(poi.get('color'), QColor) else poi.get('color', '#FFCC11'),
+                'icon': poi.get('icon', 'poi'),
+                'callsign': CONFIG.get('callsign', 'Me'), # Display Name
+                'player_color': CONFIG.get('color', '#FFCC11')
             }
-            print(f"[BROADCAST]   [{idx+1}] ID={packet_id}, Pos=({poi['x']:.3f}, {poi['y']:.3f})")
+            # print(f"[BROADCAST]   POI {packet_id} at ({poi['x']:.3f}, {poi['y']:.3f})")
             self.broadcast_packet(packet)
         
         self.pois_broadcasted = True
@@ -1632,6 +1703,9 @@ class OverlayWindow(QMainWindow):
         painter.setBrush(Qt.BrushStyle.NoBrush)
 
     def paintEvent(self, event):
+        # Poll web commands continuously (even if game is off)
+        # self.check_web_commands() # DEPRECATED: Handled by process_web_commands timer
+
         # Always visible (Persistent Overlay)
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)

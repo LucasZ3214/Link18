@@ -94,6 +94,7 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                     'ground_units': SHARED_DATA.get('ground_units', []), # Ground units
                     'map_info': SHARED_DATA['map_info'],
                     'timer': SHARED_DATA['timer'],
+                    'server_time': time.time(),
                     'config': {
                         'unit_is_kts': CONFIG.get('unit_is_kts', True),  # Speed unit setting
                         'web_marker_scale': CONFIG.get('web_marker_scale', 2.3)  # Manual scaling factor
@@ -144,9 +145,11 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                 command = json.loads(post_data.decode('utf-8'))
                 
                 # Append to shared commands queue for Main Thread to process
+                # Append to shared commands queue for Main Thread to process
+                # Threading Mode: SHARED_DATA is shared memory. Direct append is safe(ish) and expected.
                 if 'commands' not in SHARED_DATA:
                     SHARED_DATA['commands'] = []
-                    
+                
                 SHARED_DATA['commands'].append(command)
                 print(f"[WEB] Received command: {command}")
                 

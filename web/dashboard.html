@@ -357,6 +357,16 @@
                         <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
                     </svg>
                 </button>
+                <button id="poiBtn" class="toolbar-btn" onclick="togglePoiMode()" title="Place Shared POI">
+                    <!-- Map Pin Icon -->
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path>
+                        <circle cx="12" cy="10" r="3"></circle>
+                    </svg>
+                    <span id="poiCount"
+                        style="font-size: 10px; position:absolute; bottom:0; right:0; color: #00FF00; font-weight:bold;">0</span>
+                </button>
                 <button id="speedBtn" class="toolbar-btn" onclick="toggleSpeedPanel()" title="Speed Override">
                     <!-- Speedometer Icon -->
                     <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
@@ -800,6 +810,9 @@
                 btn.classList.remove('active');
                 controls.style.display = 'none';
                 canvas.style.cursor = 'default';
+
+                // Force disable POI mode if active
+                if (isPlacingPoi) togglePoiMode();
             }
             draw();
         }
@@ -975,9 +988,14 @@
         }
 
         let failCount = 0;
+        let lastServerTime = 0;
+        let isFetching = false;
 
-        // Polling Data
+        // Polling Data (Recursive setTimeout instead of setInterval to prevent race conditions)
         async function fetchData() {
+            if (isFetching) return;
+            isFetching = true;
+
             try {
                 const response = await fetch('/api/data');
                 if (response.ok) {
@@ -999,132 +1017,140 @@
                         statusEl.style.color = "#00FF00";
                     }
 
-                    if (lastData.map_info) {
-                        // Smoothly interpolate bounds to prevent jitter
-                        const mMin = lastData.map_info.map_min;
-                        const mMax = lastData.map_info.map_max;
+                    // MONOTONICITY CHECK: Fix Jitter
+                    // If we receive an older packet than what we have rendered, discard it.
+                    if (lastData.server_time && lastData.server_time < lastServerTime) {
+                        console.warn("Dropped stale packet", lastData.server_time, lastServerTime);
+                        return;
+                    }
+                    lastServerTime = lastData.server_time;
+                }
 
-                        if (mMin && mMax) {
-                            if (mapMin[0] === -1 || mapMin[0] === 0) { // First sync or invalid
-                                mapMin = [...mMin];
-                                mapMax = [...mMax];
-                                targetMapMin = [...mMin];
-                                targetMapMax = [...mMax];
-                            } else {
-                                targetMapMin = mMin;
-                                targetMapMax = mMax;
-                            }
+                if (lastData.map_info) {
+                    // Smoothly interpolate bounds to prevent jitter
+                    const mMin = lastData.map_info.map_min;
+                    const mMax = lastData.map_info.map_max;
 
-                            // "USE CENTRE AS 0,0?" Implementation
-                            // We explicitly force the map bounds to be centered around 0,0 based on the width/height.
-                            const wW = targetMapMax[0] - targetMapMin[0];
-                            const wH = targetMapMax[1] - targetMapMin[1];
-                            const halfW = wW / 2;
-                            const halfH = wH / 2;
+                    if (mMin && mMax) {
+                        if (mapMin[0] === -1 || mapMin[0] === 0) { // First sync or invalid
+                            mapMin = [...mMin];
+                            mapMax = [...mMax];
+                            targetMapMin = [...mMin];
+                            targetMapMax = [...mMax];
+                        } else {
+                            targetMapMin = mMin;
+                            targetMapMax = mMax;
+                        }
 
-                            targetMapMin = [-halfW, -halfH];
-                            targetMapMax = [0, 0];
-                            const wW2 = targetMapMax[0] - targetMapMin[0]; // width didn't change, just validating
-                            const wH2 = targetMapMax[1] - targetMapMin[1];
-                            targetMapMin = [-wW, -wH]; // Re-apply based on 0,0 max
+                        // "USE CENTRE AS 0,0?" Implementation
+                        // We explicitly force the map bounds to be centered around 0,0 based on the width/height.
+                        const wW = targetMapMax[0] - targetMapMin[0];
+                        const wH = targetMapMax[1] - targetMapMin[1];
+                        const halfW = wW / 2;
+                        const halfH = wH / 2;
 
-                            // CRITICAL PATCH: Restore Top-Left Origin (Undo previous forcing)
-                            targetMapMin = lastData.map_info.map_min;
-                            targetMapMax = lastData.map_info.map_max;
+                        targetMapMin = [-halfW, -halfH];
+                        targetMapMax = [0, 0];
+                        const wW2 = targetMapMax[0] - targetMapMin[0]; // width didn't change, just validating
+                        const wH2 = targetMapMax[1] - targetMapMin[1];
+                        targetMapMin = [-wW, -wH]; // Re-apply based on 0,0 max
 
-                            if (lastData.map_info.grid_steps) gridSteps = lastData.map_info.grid_steps;
+                        // CRITICAL PATCH: Restore Top-Left Origin (Undo previous forcing)
+                        targetMapMin = lastData.map_info.map_min;
+                        targetMapMax = lastData.map_info.map_max;
 
-                            // FLIPPED Y Logic
-                            // "current grid zero is on bottom left should be top left"
-                            // Flipping Y coordinate: NewY = MinY + MaxY - RawY
-                            if (lastData.map_info.grid_zero) {
-                                const rawGz = lastData.map_info.grid_zero;
-                                gridZero = [
-                                    rawGz[0],
-                                    targetMapMin[1] + targetMapMax[1] - rawGz[1]
-                                ];
-                            } else {
-                                gridZero = null;
-                            }
+                        if (lastData.map_info.grid_steps) gridSteps = lastData.map_info.grid_steps;
 
-                            // AUTO FOCUS: Move View to Grid (One Time) 
-                            // "DISPLAY FULL MAP, BUT move the default view to the offset"
-                            if (gridZero && lastData.map_info.grid_size) {
-                                // Apply Config Offsets (Manual Calibration)
-                                const offX = lastData.map_info.grid_offset_x || 0;
-                                const offY = lastData.map_info.grid_offset_y || 0;
-                            } // End GridZero Check
+                        // FLIPPED Y Logic
+                        // "current grid zero is on bottom left should be top left"
+                        // Flipping Y coordinate: NewY = MinY + MaxY - RawY
+                        if (lastData.map_info.grid_zero) {
+                            const rawGz = lastData.map_info.grid_zero;
+                            gridZero = [
+                                rawGz[0],
+                                targetMapMin[1] + targetMapMax[1] - rawGz[1]
+                            ];
+                        } else {
+                            gridZero = null;
+                        }
 
-                            // DEBUG: Overlay removed per user request
-                            // To re-enable debug overlay, uncomment the block below
-                            /*
-                            const dbg = document.getElementById('debugOverlay');
-                            if (dbg) {
-                                dbg.style.display = 'block';
-                                const gzDisp = gridZero ? `[${gridZero[0].toFixed(1)}, ${gridZero[1].toFixed(1)}]` : "NULL";
-                                const rawDisp = lastData.map_info.grid_zero ? `[${lastData.map_info.grid_zero[0].toFixed(1)}, ${lastData.map_info.grid_zero[1].toFixed(1)}]` : "NULL";
-                                const szDisp = lastData.map_info.grid_size ? `[${lastData.map_info.grid_size[0].toFixed(1)}, ${lastData.map_info.grid_size[1].toFixed(1)}]` : "NULL";
-                                dbg.innerText = `DEBUG VALUES...`;
-                            }
-                            */
+                        // AUTO FOCUS: Move View to Grid (One Time) 
+                        // "DISPLAY FULL MAP, BUT move the default view to the offset"
+                        if (gridZero && lastData.map_info.grid_size) {
+                            // Apply Config Offsets (Manual Calibration)
+                            const offX = lastData.map_info.grid_offset_x || 0;
+                            const offY = lastData.map_info.grid_offset_y || 0;
+                        } // End GridZero Check
 
+                        // DEBUG: Overlay removed per user request
+                        // To re-enable debug overlay, uncomment the block below
+                        /*
+                        const dbg = document.getElementById('debugOverlay');
+                        if (dbg) {
+                            dbg.style.display = 'block';
+                            const gzDisp = gridZero ? `[${gridZero[0].toFixed(1)}, ${gridZero[1].toFixed(1)}]` : "NULL";
+                            const rawDisp = lastData.map_info.grid_zero ? `[${lastData.map_info.grid_zero[0].toFixed(1)}, ${lastData.map_info.grid_zero[1].toFixed(1)}]` : "NULL";
+                            const szDisp = lastData.map_info.grid_size ? `[${lastData.map_info.grid_size[0].toFixed(1)}, ${lastData.map_info.grid_size[1].toFixed(1)}]` : "NULL";
+                            dbg.innerText = `DEBUG VALUES...`;
+                        }
+                        */
+
+                        // Apply Config Offsets (Manual Calibration)
+                        const offX = lastData.map_info.grid_offset_x || 0;
+                        const offY = lastData.map_info.grid_offset_y || 0;
+
+                        // Adjust Grid Zero (Move Grid Origin)
+                        // "the offset in in metres convert" imply input is Pixels, convert to Meters?
+                        // Let's assume user wants to shift grid by Pixels relative to the 2048px map image.
+                        // Map Width in Meters = (targetMapMax[0] - targetMapMin[0])
+                        // Map Width in Pixels = 2048 (Reference)
+                        // MetersPerPixel = MapWidthMeters / 2048
+
+                        const worldW = targetMapMax[0] - targetMapMin[0];
+                        const worldH = targetMapMax[1] - targetMapMin[1];
+
+                        // Guard against zero width
+                        if (worldW > 1) {
+                            const metersPerPx = worldW / 2048.0;
+
+                            // Apply Pixel Offsets converted to Meters
                             // Apply Config Offsets (Manual Calibration)
                             const offX = lastData.map_info.grid_offset_x || 0;
                             const offY = lastData.map_info.grid_offset_y || 0;
 
-                            // Adjust Grid Zero (Move Grid Origin)
-                            // "the offset in in metres convert" imply input is Pixels, convert to Meters?
-                            // Let's assume user wants to shift grid by Pixels relative to the 2048px map image.
-                            // Map Width in Meters = (targetMapMax[0] - targetMapMin[0])
-                            // Map Width in Pixels = 2048 (Reference)
-                            // MetersPerPixel = MapWidthMeters / 2048
+                            if (gridZero && lastData.map_info.grid_size) {
+                                // "map overlay offset" - Applying the manual offsets
+                                // Assuming offX/offY are in METERS as per user hint earlier
+                                // But converting via pixel ratio if needed? 
+                                // Let's try direct meter subtraction/addition based on user "wrong direction" history.
+                                // If they set offset, we shift the calculated GridZero.
 
-                            const worldW = targetMapMax[0] - targetMapMin[0];
-                            const worldH = targetMapMax[1] - targetMapMin[1];
+                                const worldW = targetMapMax[0] - targetMapMin[0];
+                                if (worldW > 1) {
+                                    // MetersPerPixel logic from before was:
+                                    // const metersPerPx = worldW / 2048.0;
+                                    // gridZero[0] -= offX * metersPerPx;
 
-                            // Guard against zero width
-                            if (worldW > 1) {
-                                const metersPerPx = worldW / 2048.0;
-
-                                // Apply Pixel Offsets converted to Meters
-                                // Apply Config Offsets (Manual Calibration)
-                                const offX = lastData.map_info.grid_offset_x || 0;
-                                const offY = lastData.map_info.grid_offset_y || 0;
-
-                                if (gridZero && lastData.map_info.grid_size) {
-                                    // "map overlay offset" - Applying the manual offsets
-                                    // Assuming offX/offY are in METERS as per user hint earlier
-                                    // But converting via pixel ratio if needed? 
-                                    // Let's try direct meter subtraction/addition based on user "wrong direction" history.
-                                    // If they set offset, we shift the calculated GridZero.
-
-                                    const worldW = targetMapMax[0] - targetMapMin[0];
-                                    if (worldW > 1) {
-                                        // MetersPerPixel logic from before was:
-                                        // const metersPerPx = worldW / 2048.0;
-                                        // gridZero[0] -= offX * metersPerPx;
-
-                                        // If the user inputs Meters directly in config, we just sub/add.
-                                        // Let's assume input is METERS.
-                                        gridZero[0] += offX;
-                                        gridZero[1] += offY;
-                                    }
+                                    // If the user inputs Meters directly in config, we just sub/add.
+                                    // Let's assume input is METERS.
+                                    gridZero[0] += offX;
+                                    gridZero[1] += offY;
                                 }
-
-                                const gz = gridZero;
-                                const gs = lastData.map_info.grid_size;
-
-                                // AUTO-FOCUS DISABLED per user request (restore default view)
-                                // The view now uses standard fitToScreen() instead of focusing on grid area
-                                /*
-                                if (gridZero && lastData.map_info.grid_size) {
-                                    if (!window.hasFocusedGrid) {
-                                        // ... autofocus logic ...
-                                        window.hasFocusedGrid = true;
-                                    }
-                                }
-                                */
                             }
+
+                            const gz = gridZero;
+                            const gs = lastData.map_info.grid_size;
+
+                            // AUTO-FOCUS DISABLED per user request (restore default view)
+                            // The view now uses standard fitToScreen() instead of focusing on grid area
+                            /*
+                            if (gridZero && lastData.map_info.grid_size) {
+                                if (!window.hasFocusedGrid) {
+                                    // ... autofocus logic ...
+                                    window.hasFocusedGrid = true;
+                                }
+                            }
+                            */
                         }
                     }
                     updateTimer(lastData.timer);
@@ -1144,6 +1170,9 @@
                     statusEl.innerText = "Connection Lost";
                     statusEl.style.color = "red";
                 }
+            } finally {
+                isFetching = false;
+                setTimeout(fetchData, 100); // Schedule next fetch
             }
         }
 
@@ -1232,12 +1261,16 @@
 
             // Tap Detection for Planning Mode
             const start = pointerStart.get(e.pointerId);
-            if (start && isPlanningMode) {
+            if (start && (isPlanningMode || isPlacingPoi)) {
                 const dx = e.clientX - start.x;
                 const dy = e.clientY - start.y;
                 const dist = Math.hypot(dx, dy);
                 if (dist < 10) { // Threshold for tap
-                    addScreenWaypoint(e.clientX, e.clientY);
+                    if (isPlacingPoi) {
+                        createSharedPoi(e.clientX, e.clientY);
+                    } else if (isPlanningMode) {
+                        addScreenWaypoint(e.clientX, e.clientY);
+                    }
                 }
             }
             pointerStart.delete(e.pointerId);
@@ -1265,9 +1298,67 @@
             draw();
             sendWaypoints();
         }
-        canvas.addEventListener('pointerup', handlePointerUp);
-        canvas.addEventListener('pointercancel', handlePointerUp);
         canvas.addEventListener('pointerleave', handlePointerUp);
+
+        // --- POI Placement Logic ---
+        let isPlacingPoi = false;
+
+        function togglePoiMode() {
+            isPlacingPoi = !isPlacingPoi;
+            const btn = document.getElementById('poiBtn');
+
+            if (isPlacingPoi) {
+                // Do NOT disable Planning Mode (we are inside it)
+
+                btn.classList.add('active');
+                canvas.style.cursor = 'crosshair';
+                statusEl.innerText = "Click Map to Place POI";
+            } else {
+                btn.classList.remove('active');
+                // Revert cursor/status based on Planning Mode
+                if (isPlanningMode) {
+                    canvas.style.cursor = 'crosshair';
+                    statusEl.innerText = "Link18: Active";
+                } else {
+                    canvas.style.cursor = 'default';
+                    statusEl.innerText = "Link18: Active";
+                }
+            }
+        }
+
+        async function createSharedPoi(sx, sy) {
+            const refW = mapLoaded ? mapImage.width : 2048;
+            const refH = mapLoaded ? mapImage.height : 2048;
+
+            const nx = (sx - viewOffsetX) / (refW * viewScale);
+            const ny = (sy - viewOffsetY) / (refH * viewScale);
+
+            // No Prompt - Instant Placement
+            const label = "Mark";
+
+            // Send to Backend
+            try {
+                await fetch('/api/command', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        action: 'create_poi',
+                        x: nx,
+                        y: ny,
+                        label: label || "Target"
+                    })
+                });
+                // Reset Mode
+                togglePoiMode();
+            } catch (e) {
+                console.error("POI Create Failed", e);
+                alert("Failed to create POI");
+            }
+        }
+
+        // Hook into PointerUp for POI placement (using existing handlePointerUp or separate?)
+        // handlePointerUp handles TAP detection. We can splice it there.
+        // modified handlePointerUp below:
 
         // Mouse Wheel Zoom
         canvas.addEventListener('wheel', e => {
@@ -2981,8 +3072,17 @@
 
             // 4. Draw POIs (Points of Interest) - AFTER Ground Units
             if (lastData.pois && lastData.pois.length > 0) {
+                // DEBUG POI
+                if (!window.poiDebugLogged) {
+                    console.log("Drawing POIs:", lastData.pois);
+                    window.poiDebugLogged = true;
+                }
+
                 lastData.pois.forEach(poi => {
                     const [sx, sy] = worldToScreen(poi.x, poi.y);
+
+                    // DEBUG COORDS
+                    // console.log("POI Screen:", sx, sy, "World:", poi.x, poi.y);
 
                     ctx.save();
                     ctx.translate(sx, sy);
@@ -3519,7 +3619,9 @@
 
         // Start Loops
         resize();
-        setInterval(fetchData, 100); // 10Hz updates for smoother visualization
+        resize();
+        // setInterval(fetchData, 100); // Disabled preventing race condition
+        fetchData(); // Start recursive loop
         setInterval(loadMap, 30000);  // Refresh map every 30s 
         // Actually checking map generation might be heavy. 
         // Maybe only on explicit reload? 
