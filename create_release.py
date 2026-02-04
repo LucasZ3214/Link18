@@ -4,7 +4,7 @@ import shutil
 import json
 
 def create_release():
-    release_name = "Link18_v1.3.zip"
+    release_name = "Link18_v1.3.0.zip"
     
     # 1. Create Sanitized Config
     print("Preparing sanitized config...")
