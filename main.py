@@ -778,7 +778,7 @@ class OverlayWindow(QMainWindow):
             
                 # Merge Shared Airfields (from network)
                 # First, clean up stale shared_airfields (older than 5.0 seconds)
-                stale_timeout = 5.0
+                stale_timeout = 300.0
                 current_time = time.time()
                 stale_ids = [sh_id for sh_id, sh_af in self.shared_airfields.items() 
                              if current_time - sh_af.get('last_seen', 0) > stale_timeout]
