@@ -138,16 +138,22 @@ python create_release.py
 
 ### Release Process Standards
 
-**1. Release Naming Convention**
-Always use the format: `Link18 vX.X` (e.g., `Link18 v1.3`).
-*   Do NOT use "Tactical Overlay" or other suffixes in the tag/title.
-*   The Zip file should follow: `Link18_vX.X.zip`.
+We follow **[Semantic Versioning 2.0.0](https://semver.org/)**.
+
+**1. Version Naming Convention**
+Use the format: `Link18 vMAJOR.MINOR.PATCH` (e.g., `Link18 v1.3.0`).
+*   **MAJOR**: Breaking changes (e.g., Network protocol incompatible with older clients, Config file structure changes).
+*   **MINOR**: New features (backward compatible) (e.g., New vehicles, Web Map features).
+*   **PATCH**: Bug fixes (backward compatible).
+
+*   Do NOT use "Tactical Overlay" or other suffixes.
+*   The Zip file should follow: `Link18_vX.Y.Z.zip`.
 
 **2. Description Format**
 Keep the release description basic. Specifically list **New Features** added in this version.
 
 *Example:*
-> **Link18 v1.3**
+> **Link18 v1.3.0**
 >
 > **New Features:**
 > *   Added Web Map Toolbar (Compass, Planning Mode).
