@@ -2449,7 +2449,7 @@ def print_welcome():
     """Display welcome screen with ASCII art logo"""
     welcome = """\r
 LINK 18\r
-Version 1.0\r
+Version 1.3.0\r
 \r
 [INFO] Starting overlay application...\r
 [INFO] Callsign: {callsign}\r
@@ -2471,7 +2471,7 @@ class ControllerWindow(QWidget):
         self.setup_ui()
         
     def setup_ui(self):
-        self.setWindowTitle("Link18 Tactical Controller v1.0")
+        self.setWindowTitle("Link18 Tactical Controller v1.3.0")
         self.setGeometry(100, 100, 350, 200)
         
         layout = QVBoxLayout()
