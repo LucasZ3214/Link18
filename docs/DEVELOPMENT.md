@@ -134,6 +134,26 @@ python create_release.py
 2. Runs `PyInstaller` (if needed, otherwise looks for `dist/Link18.exe`).
 3. Zips `Link18.exe`, `web/`, `README.md`, and the sanitized config into `Link18_v1.3.zip`.
 
+3. Zips `Link18.exe`, `web/`, `README.md`, and the sanitized config into `Link18_v1.3.zip`.
+
+### Release Process Standards
+
+**1. Release Naming Convention**
+Always use the format: `Link18 vX.X` (e.g., `Link18 v1.3`).
+*   Do NOT use "Tactical Overlay" or other suffixes in the tag/title.
+*   The Zip file should follow: `Link18_vX.X.zip`.
+
+**2. Description Format**
+Keep the release description basic. Specifically list **New Features** added in this version.
+
+*Example:*
+> **Link18 v1.3**
+>
+> **New Features:**
+> *   Added Web Map Toolbar (Compass, Planning Mode).
+> *   Added Auto-Calibration (M+N).
+> *   Added Real Name vehicle translation.
+
 ---
 
 ## LLM Agent Deep Dive
