@@ -132,9 +132,7 @@ python create_release.py
 **`create_release.py` performs the following:**
 1. Sanitizes `config.json` (removes personal callsign/colors).
 2. Runs `PyInstaller` (if needed, otherwise looks for `dist/Link18.exe`).
-3. Zips `Link18.exe`, `web/`, `README.md`, and the sanitized config into `Link18_v1.3.zip`.
-
-3. Zips `Link18.exe`, `web/`, `README.md`, and the sanitized config into `Link18_v1.3.zip`.
+3. Zips `Link18.exe`, `web/`, `README.md`, and the sanitized config into `Link18_v1.3.0.zip`.
 
 ### Release Process Standards
 
