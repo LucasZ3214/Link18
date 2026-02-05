@@ -107,13 +107,11 @@ class NetworkReceiver(QThread):
                 print(f"UDP Recv Error: {e}")
                 time.sleep(1)
 
-print("Version 1.3.1")
-print("----------------------------------------------------------------")
-
-class ControllerWindow(QMainWindow):
+class OverlayWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Link18 Tactical Controller v1.3.1")       
+        self.config = CONFIG # Access global config
+               
         # Window setup for transparent overlay
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint |
