@@ -364,8 +364,6 @@
                         <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path>
                         <circle cx="12" cy="10" r="3"></circle>
                     </svg>
-                    <span id="poiCount"
-                        style="font-size: 10px; position:absolute; bottom:0; right:0; color: #00FF00; font-weight:bold;">0</span>
                 </button>
                 <button id="speedBtn" class="toolbar-btn" onclick="toggleSpeedPanel()" title="Speed Override">
                     <!-- Speedometer Icon -->
@@ -1761,194 +1759,7 @@
                 ctx.shadowOffsetY = 0;
             }
 
-            // --- DRAW PLANNING PATH (Moved here for Top Z-Order) ---
-            if (planningWaypoints.length > 0) {
-                ctx.save();
-                ctx.lineWidth = 3;
-                ctx.strokeStyle = '#00FFFF'; // Cyan
-                ctx.fillStyle = '#00FFFF';
-                ctx.font = 'bold 14px Arial';
-                ctx.textAlign = 'center';
-                ctx.shadowColor = 'black';
-                ctx.shadowBlur = 4;
-
-                // Draw Lines
-                ctx.beginPath();
-                planningWaypoints.forEach((pt, i) => {
-                    const [sx, sy] = worldToScreen(pt.x, pt.y);
-                    if (i === 0) ctx.moveTo(sx, sy);
-                    else ctx.lineTo(sx, sy);
-                });
-                ctx.stroke();
-
-                // Draw Points & Text
-                let totalDist = 0;
-                planningWaypoints.forEach((pt, i) => {
-                    const [sx, sy] = worldToScreen(pt.x, pt.y);
-
-                    // Dot
-                    ctx.beginPath();
-                    ctx.fillStyle = '#00FFFF'; // Keep dots Cyan
-                    ctx.arc(sx, sy, 5, 0, Math.PI * 2);
-                    ctx.fill();
-
-                    // --- Waypoint ETA (If Enabled) ---
-                    if (showPoiEta && lastData && lastData.players && lastData.players['_local']) {
-                        const localP = lastData.players['_local'];
-                        const wW = lastData.map_info ? (lastData.map_info.map_max[0] - lastData.map_info.map_min[0]) : 65000;
-                        const wH = lastData.map_info ? (lastData.map_info.map_max[1] - lastData.map_info.map_min[1]) : 65000;
-
-                        // Optimized ETA Algorithm: "Best Entry Point"
-                        // Finds the optimal waypoint 'k' (<= i) to join the path such that (Dist(P, k) + Path(k, i)) is minimized.
-                        // This handles "passing" waypoints automatically.
-
-                        let bestEtaDist = Infinity;
-                        let cumPath0_i = 0; // Cumulative Path Distance from WP0 -> WP_i
-
-                        // Calculate Path(0, i) - Total length of path up to current point i
-                        for (let k = 1; k <= i; k++) {
-                            const p1 = planningWaypoints[k - 1];
-                            const p2 = planningWaypoints[k];
-                            cumPath0_i += Math.hypot((p2.x - p1.x) * wW, (p2.y - p1.y) * wH);
-                        }
-
-                        // Find the Best Entry Point 'k' (where k <= i)
-                        // Minimize: Dist(Player, k) + Path(k, i)
-                        // Since Path(k, i) = Path(0, i) - Path(0, k)
-                        // Minimize: Dist(Player, k) - Path(0, k) + Path(0, i)
-                        // Minimize: (Dist(Player, k) - Path(0, k))
-
-                        let runPath0_k = 0;
-                        for (let k = 0; k <= i; k++) {
-                            if (k > 0) {
-                                const p1 = planningWaypoints[k - 1];
-                                const p2 = planningWaypoints[k];
-                                runPath0_k += Math.hypot((p2.x - p1.x) * wW, (p2.y - p1.y) * wH);
-                            }
-                            const distP_k = Math.hypot((planningWaypoints[k].x - localP.x) * wW, (planningWaypoints[k].y - localP.y) * wH);
-
-                            // Cost to arrive at 'i' if we join at 'k'
-                            const cost = distP_k + (cumPath0_i - runPath0_k);
-
-                            if (cost < bestEtaDist) bestEtaDist = cost;
-                        }
-
-                        // Calculate Time
-                        const speedKmh = (etaOverrideSpeed !== null) ? etaOverrideSpeed : (localP.spd || 0);
-                        if (speedKmh > 10) {
-                            const speedMs = speedKmh / 3.6;
-                            const timeSec = bestEtaDist / speedMs;
-
-                            let timeStr = "";
-                            if (timeSec < 3600) {
-                                const m = Math.floor(timeSec / 60);
-                                const s = Math.floor(timeSec % 60);
-                                timeStr = `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
-                            } else {
-                                const h = Math.floor(timeSec / 3600);
-                                const m = Math.floor((timeSec % 3600) / 60);
-                                timeStr = `${h}:${m.toString().padStart(2, '0')}h`;
-                            }
-
-                            // Draw ETA Label below dot
-                            ctx.save();
-                            ctx.shadowBlur = 0;
-                            ctx.lineWidth = 3;
-                            ctx.strokeStyle = '#000000';
-                            ctx.fillStyle = '#FFFFFF'; // White text
-                            ctx.font = 'bold 12px Arial';
-                            ctx.textAlign = 'center';
-
-                            // Line 1: ETA Duration (e.g. "ETA 05:30")
-                            ctx.strokeText(`ETA ${timeStr}`, sx, sy + 20);
-                            ctx.fillText(`ETA ${timeStr}`, sx, sy + 20);
-
-                            // Line 2: T+ Arrival Time (e.g. "T+01:05:30")
-                            if (lastData.timer && typeof lastData.timer.flight_time !== 'undefined') {
-                                const currentT = lastData.timer.flight_time || 0;
-                                const arrivalSec = currentT + timeSec;
-
-                                const tH = Math.floor(arrivalSec / 3600);
-                                const tM = Math.floor((arrivalSec % 3600) / 60);
-                                const tS = Math.floor(arrivalSec % 60);
-                                const tStr = `T+${tH.toString().padStart(2, '0')}:${tM.toString().padStart(2, '0')}:${tS.toString().padStart(2, '0')}`;
-
-                                ctx.strokeText(tStr, sx, sy + 35);
-                                ctx.fillText(tStr, sx, sy + 35);
-                            }
-                            ctx.restore();
-                        }
-                    }
-
-                    // Distances
-                    if (i > 0) {
-                        const prev = planningWaypoints[i - 1];
-                        if (lastData && lastData.map_info) {
-                            const wW = lastData.map_info.map_max[0] - lastData.map_info.map_min[0];
-                            const wH = lastData.map_info.map_max[1] - lastData.map_info.map_min[1];
-                            const dx = (pt.x - prev.x) * wW;
-                            const dy = (pt.y - prev.y) * wH;
-                            const d = Math.hypot(dx, dy);
-                            totalDist += d;
-
-                            // Draw leg dist midpoint with Perpendicular Offset
-                            const [px, py] = worldToScreen(prev.x, prev.y);
-                            const midX = (sx + px) / 2;
-                            const midY = (sy + py) / 2;
-
-                            // Calculate perpendicular vector
-                            const legDx = sx - px;
-                            const legDy = sy - py;
-                            const legLen = Math.hypot(legDx, legDy);
-                            const perpX = -legDy / legLen;
-                            const perpY = legDx / legLen;
-
-                            const offset = 15;
-                            const lblX = midX + perpX * offset;
-                            const lblY = midY + perpY * offset;
-
-                            let distStr = "";
-                            if (userDistUnit === 'nm') {
-                                distStr = (d / 1852).toFixed(1);
-                            } else {
-                                distStr = (d / 1000).toFixed(1);
-                            }
-
-                            // Style: White Text, Black Outline
-                            ctx.save();
-                            ctx.shadowBlur = 0; // Disable soft shadow for crisp outline
-                            ctx.lineWidth = 3;
-                            ctx.strokeStyle = '#000000';
-                            ctx.fillStyle = '#FFFFFF';
-                            ctx.strokeText(distStr, lblX, lblY);
-                            ctx.fillText(distStr, lblX, lblY);
-                            ctx.restore();
-                        }
-                    }
-                });
-
-                // Total Dist Label at Last Point
-                if (totalDist > 0) {
-                    const last = planningWaypoints[planningWaypoints.length - 1];
-                    const [lx, ly] = worldToScreen(last.x, last.y);
-                    let totStr = "";
-                    if (userDistUnit === 'nm') {
-                        totStr = (totalDist / 1852).toFixed(1) + "nm";
-                    } else {
-                        totStr = (totalDist / 1000).toFixed(1) + "km";
-                    }
-
-                    ctx.save();
-                    ctx.shadowBlur = 0;
-                    ctx.lineWidth = 3;
-                    ctx.strokeStyle = '#000000';
-                    ctx.fillStyle = '#FFDD00'; // Gold for total
-                    ctx.strokeText(`TOT: ${totStr}`, lx, ly + 60);
-                    ctx.fillText(`TOT: ${totStr}`, lx, ly + 60);
-                    ctx.restore();
-                }
-                ctx.restore();
-            }
+            // --- PLANNING PATH MOVED TO END OF DRAW LOOP FOR TOP Z-ORDER ---
 
             if (!lastData) {
                 ctx.restore();
@@ -2898,6 +2709,31 @@
 
                     drawNATOIcon(ctx, sx, sy, size, color, isFriendly, dots, nato.type, nato.af, nato.isReinforced);
 
+                    // --- Draw 4.5km Radius Circle for SPAA Convoys ---
+                    // Check if cluster contains SPAA (anti-aircraft) units
+                    // Skip if this is an airfield SAM (nato.af exists) - airfields already have 12km circle
+                    const hasSpaa = nato.type === "SPAA-SAM" ||
+                        c.units.some(u => (u.icon || "").toLowerCase().includes("aa") ||
+                            (u.icon || "").toLowerCase().includes("spaa"));
+                    const isAirfieldSam = nato.af !== null && nato.af !== undefined;
+
+                    if (hasSpaa && worldWidth > 0 && !isAirfieldSam) {
+                        // 4.5km radius in normalized coordinates
+                        const radiusNorm = 4500 / worldWidth;
+                        const radiusPixels = radiusNorm * mapDrawW;
+
+                        ctx.save();
+                        ctx.translate(sx, sy);
+                        ctx.beginPath();
+                        ctx.arc(0, 0, radiusPixels, 0, 2 * Math.PI);
+                        ctx.strokeStyle = isFriendly ? 'rgba(126, 226, 255, 0.6)' : 'rgba(255, 126, 126, 0.6)';
+                        ctx.setLineDash([8, 4]); // Dashed line
+                        ctx.lineWidth = 3 * markerScale;
+                        ctx.stroke();
+                        ctx.setLineDash([]); // Reset dash
+                        ctx.restore();
+                    }
+
                     // Draw company line if needed (detached from frame)
                     if (showCompanyLine) {
                         ctx.save();
@@ -3013,6 +2849,29 @@
                         ctx.lineWidth = 1 * markerScale;
                         ctx.strokeRect(-rectW / 2, -rectH / 2, rectW, rectH);
                         ctx.restore();
+
+                        // --- Draw 12km Radius Circle for Long Runways (>3000m) ---
+                        // Calculate runway length in meters using worldWidth
+                        const runwayMeters = (af.len || 0) * worldWidth;
+
+                        if (runwayMeters > 3000 && worldWidth > 0) {
+                            // 12km radius in normalized coordinates
+                            const radiusNorm = 12000 / worldWidth;
+                            const radiusPixels = radiusNorm * mapDrawW;
+
+                            ctx.save();
+                            ctx.translate(sx, sy);
+                            ctx.beginPath();
+                            ctx.arc(0, 0, radiusPixels, 0, 2 * Math.PI);
+                            ctx.strokeStyle = af.color || 'rgba(100, 100, 255, 0.5)';
+                            ctx.setLineDash([10, 5]); // Dashed line
+                            ctx.lineWidth = 4 * markerScale;
+                            ctx.globalAlpha = 0.5;
+                            ctx.stroke();
+                            ctx.setLineDash([]); // Reset dash
+                            ctx.globalAlpha = 1.0;
+                            ctx.restore();
+                        }
                     }
                 });
 
@@ -3473,6 +3332,11 @@
             }
 
             players.forEach(([pid, p]) => {
+                // Skip players with invalid coordinates (null/undefined become 0 and cause centering issues)
+                if (p.x === null || p.x === undefined || p.y === null || p.y === undefined) {
+                    return; // Skip this player
+                }
+
                 const [sx, sy] = worldToScreen(p.x, p.y);
 
                 // Calculate rotation from dx, dy
@@ -3613,8 +3477,414 @@
 
                 ctx.restore();
             });
+
+            // --- DRAW PLANNING PATH (Top Z-Order - Above Icons) ---
+            if (planningWaypoints.length > 0) {
+                ctx.save();
+                ctx.lineWidth = 3;
+                ctx.strokeStyle = '#00FFFF'; // Cyan
+                ctx.fillStyle = '#00FFFF';
+                ctx.font = 'bold 14px Arial';
+                ctx.textAlign = 'center';
+                ctx.shadowColor = 'black';
+                ctx.shadowBlur = 4;
+
+                // Draw Lines
+                ctx.beginPath();
+                planningWaypoints.forEach((pt, i) => {
+                    const [sx, sy] = worldToScreen(pt.x, pt.y);
+                    if (i === 0) ctx.moveTo(sx, sy);
+                    else ctx.lineTo(sx, sy);
+                });
+                ctx.stroke();
+
+                // Draw Points & Text
+                let totalDist = 0;
+                planningWaypoints.forEach((pt, i) => {
+                    const [sx, sy] = worldToScreen(pt.x, pt.y);
+
+                    // Dot
+                    ctx.beginPath();
+                    ctx.fillStyle = '#00FFFF'; // Keep dots Cyan
+                    ctx.arc(sx, sy, 5, 0, Math.PI * 2);
+                    ctx.fill();
+
+                    // --- Waypoint ETA (If Enabled) ---
+                    if (showPoiEta && lastData && lastData.players && lastData.players['_local']) {
+                        const localP = lastData.players['_local'];
+                        const wW = lastData.map_info ? (lastData.map_info.map_max[0] - lastData.map_info.map_min[0]) : 65000;
+                        const wH = lastData.map_info ? (lastData.map_info.map_max[1] - lastData.map_info.map_min[1]) : 65000;
+
+                        let bestEtaDist = Infinity;
+                        let cumPath0_i = 0;
+
+                        for (let k = 1; k <= i; k++) {
+                            const p1 = planningWaypoints[k - 1];
+                            const p2 = planningWaypoints[k];
+                            cumPath0_i += Math.hypot((p2.x - p1.x) * wW, (p2.y - p1.y) * wH);
+                        }
+
+                        let runPath0_k = 0;
+                        for (let k = 0; k <= i; k++) {
+                            if (k > 0) {
+                                const p1 = planningWaypoints[k - 1];
+                                const p2 = planningWaypoints[k];
+                                runPath0_k += Math.hypot((p2.x - p1.x) * wW, (p2.y - p1.y) * wH);
+                            }
+                            const distP_k = Math.hypot((planningWaypoints[k].x - localP.x) * wW, (planningWaypoints[k].y - localP.y) * wH);
+                            const cost = distP_k + (cumPath0_i - runPath0_k);
+                            if (cost < bestEtaDist) bestEtaDist = cost;
+                        }
+
+                        const speedKmh = (etaOverrideSpeed !== null) ? etaOverrideSpeed : (localP.spd || 0);
+                        if (speedKmh > 10) {
+                            const speedMs = speedKmh / 3.6;
+                            const timeSec = bestEtaDist / speedMs;
+
+                            let timeStr = "";
+                            if (timeSec < 3600) {
+                                const m = Math.floor(timeSec / 60);
+                                const s = Math.floor(timeSec % 60);
+                                timeStr = `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+                            } else {
+                                const h = Math.floor(timeSec / 3600);
+                                const m = Math.floor((timeSec % 3600) / 60);
+                                timeStr = `${h}:${m.toString().padStart(2, '0')}h`;
+                            }
+
+                            ctx.save();
+                            ctx.shadowBlur = 0;
+                            ctx.lineWidth = 3;
+                            ctx.strokeStyle = '#000000';
+                            ctx.fillStyle = '#FFFFFF';
+                            ctx.font = 'bold 12px Arial';
+                            ctx.textAlign = 'center';
+
+                            ctx.strokeText(`ETA ${timeStr}`, sx, sy + 20);
+                            ctx.fillText(`ETA ${timeStr}`, sx, sy + 20);
+
+                            if (lastData.timer && typeof lastData.timer.flight_time !== 'undefined') {
+                                const currentT = lastData.timer.flight_time || 0;
+                                const arrivalSec = currentT + timeSec;
+                                const tH = Math.floor(arrivalSec / 3600);
+                                const tM = Math.floor((arrivalSec % 3600) / 60);
+                                const tS = Math.floor(arrivalSec % 60);
+                                const tStr = `T+${tH.toString().padStart(2, '0')}:${tM.toString().padStart(2, '0')}:${tS.toString().padStart(2, '0')}`;
+                                ctx.strokeText(tStr, sx, sy + 35);
+                                ctx.fillText(tStr, sx, sy + 35);
+                            }
+                            ctx.restore();
+                        }
+                    }
+
+                    // Distances
+                    if (i > 0) {
+                        const prev = planningWaypoints[i - 1];
+                        if (lastData && lastData.map_info) {
+                            const wW = lastData.map_info.map_max[0] - lastData.map_info.map_min[0];
+                            const wH = lastData.map_info.map_max[1] - lastData.map_info.map_min[1];
+                            const dx = (pt.x - prev.x) * wW;
+                            const dy = (pt.y - prev.y) * wH;
+                            const d = Math.hypot(dx, dy);
+                            totalDist += d;
+
+                            const [px, py] = worldToScreen(prev.x, prev.y);
+                            const midX = (sx + px) / 2;
+                            const midY = (sy + py) / 2;
+
+                            const legDx = sx - px;
+                            const legDy = sy - py;
+                            const legLen = Math.hypot(legDx, legDy);
+                            const perpX = -legDy / legLen;
+                            const perpY = legDx / legLen;
+
+                            const offset = 15;
+                            const lblX = midX + perpX * offset;
+                            const lblY = midY + perpY * offset;
+
+                            let distStr = "";
+                            if (userDistUnit === 'nm') {
+                                distStr = (d / 1852).toFixed(1);
+                            } else {
+                                distStr = (d / 1000).toFixed(1);
+                            }
+
+                            ctx.save();
+                            ctx.shadowBlur = 0;
+                            ctx.lineWidth = 3;
+                            ctx.strokeStyle = '#000000';
+                            ctx.fillStyle = '#FFFFFF';
+                            ctx.strokeText(distStr, lblX, lblY);
+                            ctx.fillText(distStr, lblX, lblY);
+                            ctx.restore();
+                        }
+                    }
+                });
+
+                // Total Dist Label at Last Point
+                if (totalDist > 0) {
+                    const last = planningWaypoints[planningWaypoints.length - 1];
+                    const [lx, ly] = worldToScreen(last.x, last.y);
+                    let totStr = "";
+                    if (userDistUnit === 'nm') {
+                        totStr = (totalDist / 1852).toFixed(1) + "nm";
+                    } else {
+                        totStr = (totalDist / 1000).toFixed(1) + "km";
+                    }
+
+                    ctx.save();
+                    ctx.shadowBlur = 0;
+                    ctx.lineWidth = 3;
+                    ctx.strokeStyle = '#000000';
+                    ctx.fillStyle = '#FFDD00';
+                    ctx.strokeText(`TOT: ${totStr}`, lx, ly + 60);
+                    ctx.fillText(`TOT: ${totStr}`, lx, ly + 60);
+                    ctx.restore();
+                }
+                ctx.restore();
+            }
+
             drawLegend(ctx);
             ctx.restore();
+
+            // --- Scale Bar (Ruler Style) ---
+            if (worldWidth > 0) {
+                const mapSizeM = worldWidth;
+                const refW = mapLoaded ? mapImage.width : 2048;
+                const refH = mapLoaded ? mapImage.height : 2048;
+
+                const pixelsPerKm = (mapDrawW * dpr / worldWidth) * 1000;
+                // 1 NM = 1.852 km. Pixels per NM is larger.
+                const pixelsPerNm = pixelsPerKm * 1.852;
+
+                // --- KM Ruler Calculation ---
+                // Target 600px width
+                let targetPx = 600 * markerScale;
+                if (targetPx < 300) targetPx = 300;
+
+                let candidateKm = targetPx / pixelsPerKm;
+
+                let maxKm = 10;
+                // Extended steps for high zoom
+                const steps = [0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000];
+                for (let s of steps) {
+                    if (s >= candidateKm * 0.8) {
+                        maxKm = s;
+                        break;
+                    }
+                }
+
+                const barWidth = maxKm * pixelsPerKm;
+
+                // --- NM Ruler Calculation (Secondary) ---
+                // We want it to be roughly same physical width, but using NM steps
+                let candidateNm = targetPx / pixelsPerNm;
+                let maxNm = 5;
+                const nmSteps = [0.25, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2500];
+                for (let s of nmSteps) {
+                    if (s >= candidateNm * 0.8) {
+                        maxNm = s;
+                        break;
+                    }
+                }
+                const nmBarWidth = maxNm * pixelsPerNm;
+
+
+                // Position: High Bottom Right
+                // Need space for TWO rulers + Grid Label + Map Label
+                // Move up more? 180 was good for 1 ruler. Let's maximize space.
+                let barX = canvas.width - barWidth - 60;
+                let barY = canvas.height - 280; // Reduced from 380px
+
+                if (barX < 20) barX = 20;
+                if (barY < 50) barY = 50;
+
+                const sizeMult = 2.0;
+                const lineMult = 3.0;
+
+                const scaledLineWidth = Math.max(3, 2 * markerScale * lineMult);
+                const scaledFontSize = Math.max(20, 12 * markerScale * sizeMult);
+
+                ctx.save();
+                ctx.lineCap = 'butt';
+                ctx.font = `bold ${scaledFontSize}px Arial`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'bottom';
+                const tickLen = scaledFontSize * 0.6;
+
+                // --- DRAW KM RULER (Top) ---
+
+                // Base Line
+                ctx.beginPath();
+                ctx.moveTo(barX, barY);
+                ctx.lineTo(barX + barWidth, barY);
+                ctx.strokeStyle = 'black';
+                ctx.lineWidth = scaledLineWidth + 2;
+                ctx.stroke();
+
+                ctx.strokeStyle = 'white';
+                ctx.lineWidth = scaledLineWidth; // Inner white
+                ctx.stroke();
+
+                // KM Ticks
+                let tickMarks = [];
+                // Expanded logic for missing 100km ticks
+                if (maxKm <= 1) tickMarks = [0, 0.5, 1];
+                else if (maxKm <= 5) tickMarks = [0, 1, 2, 5];
+                else if (maxKm <= 10) tickMarks = [0, 1, 5, 10];
+                else if (maxKm <= 20) tickMarks = [0, 5, 10, 20];
+                else if (maxKm <= 50) tickMarks = [0, 10, 25, 50];
+                else if (maxKm <= 100) tickMarks = [0, 25, 50, 75, 100];
+                else if (maxKm <= 200) tickMarks = [0, 50, 100, 150, 200];
+                else if (maxKm <= 500) tickMarks = [0, 100, 250, 500];
+                else if (maxKm <= 1000) tickMarks = [0, 250, 500, 750, 1000];
+                else tickMarks = [0, maxKm / 2, maxKm];
+
+                tickMarks = tickMarks.filter(k => k <= maxKm);
+
+                tickMarks.forEach(km => {
+                    const pxOffset = km * pixelsPerKm;
+                    const tickX = (barX + barWidth) - pxOffset;
+
+                    // Tick (Upwards)
+                    ctx.beginPath();
+                    ctx.moveTo(tickX, barY);
+                    ctx.lineTo(tickX, barY - tickLen);
+                    ctx.strokeStyle = 'black';
+                    ctx.lineWidth = scaledLineWidth + 2;
+                    ctx.stroke();
+
+                    ctx.strokeStyle = 'white';
+                    ctx.lineWidth = scaledLineWidth;
+                    ctx.stroke();
+
+                    // Label
+                    let label = `${km}`;
+                    if (km === 0) label = "0";
+                    const labelY = barY - tickLen - 6;
+
+                    ctx.strokeStyle = 'black';
+                    ctx.lineWidth = 3;
+                    ctx.strokeText(label, tickX, labelY);
+                    ctx.fillStyle = 'white';
+                    ctx.fillText(label, tickX, labelY);
+                });
+
+                // "km" Label
+                ctx.textAlign = 'left';
+                const labelY = barY - tickLen - 6;
+                ctx.strokeText("km", barX + barWidth + (10 * markerScale), labelY);
+                ctx.fillText("km", barX + barWidth + (10 * markerScale), labelY);
+
+
+                // --- DRAW NM RULER (Bottom) ---
+                // Positioned below KM ruler.
+                const nmBarY = barY + 75; // Gap 75px
+
+                // Align Right Edge with KM Ruler
+                // Start X = (barX + barWidth) - nmBarWidth
+                const nmBarX = (barX + barWidth) - nmBarWidth;
+
+                // Base Line
+                ctx.beginPath();
+                ctx.moveTo(nmBarX, nmBarY);
+                ctx.lineTo(barX + barWidth, nmBarY); // End at aligned right
+                ctx.strokeStyle = 'black';
+                ctx.lineWidth = scaledLineWidth + 2;
+                ctx.stroke();
+
+                ctx.strokeStyle = 'white';
+                ctx.lineWidth = scaledLineWidth;
+                ctx.stroke();
+
+                // NM Ticks
+                let nmTicks = [];
+                if (maxNm <= 1) nmTicks = [0, 0.5, 1];
+                else if (maxNm <= 5) nmTicks = [0, 1, 2, 5];
+                else if (maxNm <= 10) nmTicks = [0, 2, 5, 10];
+                else if (maxNm <= 20) nmTicks = [0, 5, 10, 20];
+                else if (maxNm <= 50) nmTicks = [0, 10, 25, 50];
+                else if (maxNm <= 100) nmTicks = [0, 25, 50, 100];
+                else if (maxNm <= 200) nmTicks = [0, 50, 100, 200];
+                else if (maxNm <= 500) nmTicks = [0, 100, 250, 500];
+                else nmTicks = [0, maxNm / 2, maxNm];
+
+                nmTicks = nmTicks.filter(n => n <= maxNm);
+
+                ctx.textAlign = 'center';
+
+                nmTicks.forEach(nm => {
+                    const pxOffset = nm * pixelsPerNm;
+                    const tickX = (barX + barWidth) - pxOffset;
+
+                    // Tick (Upwards from NM line? Or Downwards?)
+                    // Overlay does Upwards usually? Let's do Upwards again.
+                    ctx.beginPath();
+                    ctx.moveTo(tickX, nmBarY);
+                    ctx.lineTo(tickX, nmBarY - tickLen);
+                    ctx.strokeStyle = 'black';
+                    ctx.lineWidth = scaledLineWidth + 2;
+                    ctx.stroke();
+
+                    ctx.strokeStyle = 'white';
+                    ctx.lineWidth = scaledLineWidth;
+                    ctx.stroke();
+
+                    // Label (Above tick, might conflict with KM ruler?
+                    // KM ruler is at barY. NM ruler is at barY + 45.
+                    // Ticks go up to barY + 45 - tickLen.
+                    // Labels at barY + 45 - tickLen - 6.
+                    // If tickLen is large, it might hit KM ruler layout.
+                    // Let's put NM labels BELOW the NM line?
+                    // Or keep above? 45px gap should be enough for label height.
+
+                    let label = `${nm}`;
+                    if (nm === 0) label = "0";
+
+                    // Draw Label ABOVE like Overlay
+                    const lblY = nmBarY - tickLen - 6;
+
+                    ctx.strokeStyle = 'black';
+                    ctx.lineWidth = 3;
+                    ctx.strokeText(label, tickX, lblY);
+                    ctx.fillStyle = 'white';
+                    ctx.fillText(label, tickX, lblY);
+                });
+
+                // "NM" Label
+                ctx.textAlign = 'left';
+                const nmLblY = nmBarY - tickLen - 6;
+                ctx.strokeText("NM", barX + barWidth + (10 * markerScale), nmLblY);
+                ctx.fillText("NM", barX + barWidth + (10 * markerScale), nmLblY);
+
+
+                // --- Grid & Map Labels ---
+                const gridKm = (worldWidth / 8) / 1000;
+                const gridNm = gridKm * 0.539957;
+
+                ctx.textAlign = 'right';
+                const gridText = `${gridKm.toFixed(2)} km = ${gridNm.toFixed(2)} NM`;
+
+                const infoLabelX = barX + barWidth;
+                // Below NM Ruler
+                const infoLabelY = nmBarY + 45;
+
+                ctx.strokeText(gridText, infoLabelX, infoLabelY);
+                ctx.fillText(gridText, infoLabelX, infoLabelY);
+
+                const mapKm = worldWidth / 1000;
+                const mapNm = mapKm * 0.539957;
+                const mapText = `Map: ${mapKm.toFixed(0)}km / ${mapNm.toFixed(0)}NM`;
+
+                ctx.fillStyle = 'white';
+                ctx.strokeStyle = 'black';
+
+                const mapLabelY = infoLabelY + scaledFontSize + 5;
+                ctx.strokeText(mapText, infoLabelX, mapLabelY);
+                ctx.fillText(mapText, infoLabelX, mapLabelY);
+
+                ctx.restore();
+            }
         }
 
         // Start Loops

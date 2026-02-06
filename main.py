@@ -741,6 +741,7 @@ class OverlayWindow(QMainWindow):
             self.grid_steps = ref_data.get('grid_steps') # Store grid steps
             self.grid_zero = ref_data.get('grid_zero')   # Store grid zero
             self.grid_size = ref_data.get('grid_size')   # Store grid size
+            self.map_bounds = ref_data # Sync for paintEvent
             # print(f"[DEBUG] Map Bounds Refreshed: {self.map_min} to {self.map_max}")
         return ref_data
 
@@ -2181,6 +2182,27 @@ class OverlayWindow(QMainWindow):
                     painter.setPen(QPen(c, 6))
                     painter.drawLine(int(-runway_len/2), 0, int(runway_len/2), 0)
                     
+                    # --- Draw 12km Radius Circle for Long Runways (>3000m) ---
+                    # Calculate runway length in meters (approx)
+                    # Assume map_size is approximately 65km (typical WT map)
+                    map_size_m = float(CONFIG.get('map_size_meters', 65000))
+                    runway_meters = (airfield.get('len', 0) * map_size_m)
+                    
+                    if runway_meters > 3000:
+                        # 12km radius in pixels
+                        radius_normalized = 12000 / map_size_m
+                        radius_pixels = radius_normalized * MAP_WIDTH
+                        
+                        # Draw circle (counter-rotate to undo runway angle)
+                        painter.rotate(-angle)
+                        circle_pen = QPen(c, 4, Qt.PenStyle.DashLine)
+                        circle_pen.setColor(QColor(c.red(), c.green(), c.blue(), 100))  # Semi-transparent
+                        painter.setPen(circle_pen)
+                        painter.setBrush(Qt.BrushStyle.NoBrush)
+                        painter.drawEllipse(int(-radius_pixels), int(-radius_pixels), 
+                                            int(radius_pixels * 2), int(radius_pixels * 2))
+                        painter.rotate(angle)  # Re-rotate for label
+                    
                     # Draw Label (AF1, AF2, etc)
                     # Use 'id' if available, else index
                     af_label = f"AF{airfield.get('id', idx+1)}"
@@ -2221,6 +2243,246 @@ class OverlayWindow(QMainWindow):
                         
                     painter.drawText(int(MAP_OFFSET_X), int(MAP_OFFSET_Y) - 5, 
                                    f"Map: {MAP_WIDTH}x{MAP_HEIGHT} ({MAP_OFFSET_X},{MAP_OFFSET_Y}){trail_info}")
+
+            # --- Draw Scale Bar (Bottom Right of Map) ---
+            # Use actual map dimensions if available, otherwise config default
+            map_size_m = float(CONFIG.get('map_size_meters', 65000))
+            
+            # Check if we have map_info with actual bounds
+            if hasattr(self, 'map_bounds') and self.map_bounds:
+                map_min = self.map_bounds.get('map_min', [0, 0])
+                map_max = self.map_bounds.get('map_max', [map_size_m, map_size_m])
+                map_size_m = max(map_max[0] - map_min[0], map_max[1] - map_min[1])
+            
+            # Calculate grid cell size (map typically divided into 8 squares)
+            grid_cells = 8
+            grid_cell_m = map_size_m / grid_cells
+            grid_cell_km = grid_cell_m / 1000
+            
+            # --- Scale Bar (Ruler Style) ---
+            
+            # Flush RIGHT against Map Edge
+            map_right_edge = MAP_OFFSET_X + MAP_WIDTH
+            
+            # Determine Bar Max Range (target 10km if possible)
+            max_km = 10
+            if map_size_m < 12000: max_km = 5
+            if map_size_m < 6000: max_km = 2
+            
+            # Calculate pixel ratio
+            pixels_per_km = MAP_WIDTH / (map_size_m / 1000)
+            
+            # Calculate Bar Width
+            bar_width = round(max_km * pixels_per_km)
+            bar_x = int(map_right_edge - bar_width)
+            bar_y = int(MAP_OFFSET_Y + MAP_HEIGHT - 35) # Ruler position
+            
+            # Draw Base Line (Outline)
+            painter.setPen(QPen(Qt.GlobalColor.black, 4))
+            painter.drawLine(bar_x, bar_y, bar_x + bar_width, bar_y)
+            # Draw Base Line (White)
+            painter.setPen(QPen(Qt.GlobalColor.white, 2))
+            painter.drawLine(bar_x, bar_y, bar_x + bar_width, bar_y)
+            
+            # Draw Ticks and Labels (Right to Left)
+            # 0 is at map_right_edge (bar_x + bar_width)
+            
+            tick_marks = [0, 1, 5, 10]
+            if max_km < 10: tick_marks = [0, 1, 2, 5] if max_km >= 5 else [0, 0.5, 1, 2]
+            
+            painter.setFont(QFont("Arial", 7, QFont.Weight.Bold))
+            fm = QFontMetrics(painter.font())
+            
+            # --- KM Scale ---
+            for km in tick_marks:
+                if km > max_km: continue
+                
+                px_offset = round(km * pixels_per_km)
+                tick_x = (bar_x + bar_width) - px_offset
+                
+                # Draw Tick (No Outline, Above Line)
+                painter.setPen(QPen(Qt.GlobalColor.black, 2)) # Use Black or White? Usually White on Black map?
+                # User said "do not use individual outline".
+                # The Bar is White with Black Outline.
+                # If I draw White tick, it matches.
+                # If background is light, it vanishes.
+                # If background is dark (map), White is good.
+                # I'll use White (thickness 2).
+                painter.setPen(QPen(Qt.GlobalColor.white, 2))
+                painter.drawLine(tick_x, bar_y, tick_x, bar_y - 6) # Upwards (Above line)
+                
+                # Draw Label (Number only)
+                is_whole = isinstance(km, int) or (isinstance(km, float) and km.is_integer())
+                label = f"{int(km)}" if is_whole else f"{km}"
+                if km == 0: label = "0"
+                
+                tw = fm.horizontalAdvance(label)
+                # Double draw text
+                painter.setPen(QPen(Qt.GlobalColor.black))
+                painter.drawText(int(tick_x - tw/2 + 1), int(bar_y - 8), label) # Above tick
+                painter.setPen(QPen(Qt.GlobalColor.white))
+                painter.drawText(int(tick_x - tw/2), int(bar_y - 9), label)
+
+            # "km" Label at the Right
+            label = "km"
+            tw = fm.horizontalAdvance(label)
+            label_x = int(bar_x + bar_width + 8) 
+            painter.setPen(QPen(Qt.GlobalColor.black))
+            painter.drawText(label_x + 1, int(bar_y - 8), label)
+            painter.setPen(QPen(Qt.GlobalColor.white))
+            painter.drawText(label_x, int(bar_y - 9), label)
+
+            # --- Nautical Miles (NM) Scale ---
+            # ruler at ~25px below KM
+            nm_bar_y = bar_y + 25 
+            
+            # Extend to 10 NM fixed?
+            # 10 NM = 18.52 km.
+            # Convert 10 NM to pixels.
+            px_10nm = round(10 * 1.852 * pixels_per_km)
+            
+            # NM Bar starts at "0" (Same Right point as KM) and extends Left.
+            # Right point: bar_x + bar_width
+            # Left point: (bar_x + bar_width) - px_10nm
+            nm_bar_x_start = (bar_x + bar_width) - px_10nm
+            
+            # Draw Base Line (NM) - Outline + White
+            painter.setPen(QPen(Qt.GlobalColor.black, 4))
+            painter.drawLine(nm_bar_x_start, nm_bar_y, bar_x + bar_width, nm_bar_y)
+            painter.setPen(QPen(Qt.GlobalColor.white, 2))
+            painter.drawLine(nm_bar_x_start, nm_bar_y, bar_x + bar_width, nm_bar_y)
+            
+            # NM Ticks: 0, 1, 2, 5, 10
+            nm_ticks = [0, 1, 2, 5, 10]
+            
+            for nm in nm_ticks:
+                # Always draw up to 10? Yes.
+                px_offset = round(nm * 1.852 * pixels_per_km)
+                tick_x = (bar_x + bar_width) - px_offset
+                
+                # Draw Tick (Upwards? Above line)
+                painter.setPen(QPen(Qt.GlobalColor.white, 2))
+                painter.drawLine(tick_x, nm_bar_y, tick_x, nm_bar_y - 6) 
+                
+                # Label (Above ticks)
+                label = f"{int(nm)}"
+                tw = fm.horizontalAdvance(label)
+                
+                painter.setPen(QPen(Qt.GlobalColor.black))
+                painter.drawText(int(tick_x - tw/2 + 1), int(nm_bar_y - 8), label) # Moved Up
+                painter.setPen(QPen(Qt.GlobalColor.white))
+                painter.drawText(int(tick_x - tw/2), int(nm_bar_y - 9), label)
+
+            # "NM" Label at Right (Above line)
+            label = "NM"
+            painter.setPen(QPen(Qt.GlobalColor.black))
+            painter.drawText(label_x + 1, int(nm_bar_y - 8), label) # Moved Up
+            painter.setPen(QPen(Qt.GlobalColor.white))
+            painter.drawText(label_x, int(nm_bar_y - 9), label)
+
+            # --- Special "1 Grid" Label (Above everything) ---
+            grid_km = (map_size_m / 8) / 1000
+            
+            # Map Size Label (Below NM scale line)
+            # Move further down to be clearly "outside" the map image
+            
+            map_label_y = nm_bar_y + 35 
+            
+            # Grid Size Label (Above Map Size)
+            grid_label_y = map_label_y - 12
+            
+            # Draw Grid Size - Flush Right
+            grid_nm = grid_km * 0.539957
+            label = f"{grid_km:.2f} km = {grid_nm:.2f} NM"
+            tw = fm.horizontalAdvance(label)
+            
+            painter.setFont(QFont("Arial", 7, QFont.Weight.Bold)) 
+            
+            painter.setPen(QPen(Qt.GlobalColor.black))
+            painter.drawText(int(bar_x + bar_width - tw + 1), int(grid_label_y + 1), label)
+            painter.setPen(QPen(Qt.GlobalColor.white))
+            painter.drawText(int(bar_x + bar_width - tw), int(grid_label_y), label)
+            
+            # Draw "Map: ..." 
+            map_km = map_size_m / 1000
+            map_nm = map_km * 0.539957
+            label = f"Map: {int(map_km)}km/{int(map_nm)}NM"
+            tw = fm.horizontalAdvance(label)
+            painter.setPen(QPen(Qt.GlobalColor.black))
+            painter.drawText(int(bar_x + bar_width - tw + 1), int(map_label_y + 1), label)
+            painter.setPen(QPen(Qt.GlobalColor.white))
+            painter.drawText(int(bar_x + bar_width - tw), int(map_label_y), label)
+
+
+            # --- Draw SPAA Radius Circles (4.5km) ---
+            if hasattr(self, 'map_ground_units') and self.map_ground_units:
+                # Cluster SPAA units
+                spaa_clusters = []
+                cluster_threshold = 0.05  # Normalized distance threshold
+                
+                for unit in self.map_ground_units:
+                    icon = (unit.get('icon') or '').lower()
+                    # Check if unit is SPAA
+                    if 'aa' in icon or 'spaa' in icon or 'sam' in icon:
+                        unit_x, unit_y = unit.get('x', 0), unit.get('y', 0)
+                        added = False
+                        
+                        # Try to add to existing cluster
+                        for cluster in spaa_clusters:
+                            dist = ((unit_x - cluster['x'])**2 + (unit_y - cluster['y'])**2)**0.5
+                            if dist < cluster_threshold:
+                                # Update cluster centroid
+                                n = cluster['count']
+                                cluster['x'] = (cluster['x'] * n + unit_x) / (n + 1)
+                                cluster['y'] = (cluster['y'] * n + unit_y) / (n + 1)
+                                cluster['count'] += 1
+                                added = True
+                                break
+                        
+                        if not added:
+                            spaa_clusters.append({
+                                'x': unit_x,
+                                'y': unit_y,
+                                'count': 1,
+                                'color': unit.get('color', '#FF0000')
+                            })
+                
+                # Draw 4.5km radius circle for each SPAA cluster
+                for cluster in spaa_clusters:
+                    # Skip if cluster is near an airfield (airfields already have 12km circle)
+                    is_near_airfield = False
+                    if hasattr(self, 'airfields') and self.airfields:
+                        for af in self.airfields:
+                            af_x, af_y = af.get('x', 0), af.get('y', 0)
+                            dist = ((cluster['x'] - af_x)**2 + (cluster['y'] - af_y)**2)**0.5
+                            if dist < 0.08:  # About 5km in normalized coords
+                                is_near_airfield = True
+                                break
+                    
+                    if is_near_airfield:
+                        continue
+                    
+                    cx = MAP_OFFSET_X + (cluster['x'] * MAP_WIDTH)
+                    cy = MAP_OFFSET_Y + (cluster['y'] * MAP_HEIGHT)
+                    
+                    # 4.5km radius in pixels
+                    radius_normalized = 4500 / map_size_m
+                    radius_pixels = radius_normalized * MAP_WIDTH
+                    
+                    # Determine color based on unit color (friendly vs hostile)
+                    color_str = str(cluster.get('color', '#FF0000'))
+                    is_friendly = '#043' in color_str or '#174D' in color_str or '4,63,255' in color_str
+                    circle_color = QColor(126, 226, 255, 150) if is_friendly else QColor(255, 126, 126, 150)
+                    
+                    # Draw dashed circle
+                    painter.save()
+                    painter.translate(cx, cy)
+                    pen = QPen(circle_color, 3, Qt.PenStyle.DashLine)
+                    painter.setPen(pen)
+                    painter.setBrush(Qt.BrushStyle.NoBrush)
+                    painter.drawEllipse(int(-radius_pixels), int(-radius_pixels),
+                                        int(radius_pixels * 2), int(radius_pixels * 2))
+                    painter.restore()
 
             # --- Draw Local POIs ---
             if self.pois:
