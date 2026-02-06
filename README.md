@@ -1,4 +1,4 @@
-# Link18 v1.3.1 - Tactical Overlay for War Thunder
+# Link18 v1.4.0 - Tactical Overlay for War Thunder
 
 **Link18** is a transparent tactical overlay and web-based map for War Thunder that enables real-time squad coordination via shared markers, flight timers, and NATO-standard unit symbology.
 
@@ -124,6 +124,17 @@ Click the **Settings** button (bottom right) to:
 ## For Developers
 
 Detailed technical documentation, including project structure, architecture, and network protocols, can be found in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
+
+---
+
+## What's New in v1.4.0
+
+| Feature | Description |
+|---------|-------------|
+| **Scale Bar Accuracy** | Fixed DPR scaling for accurate km/nm ruler |
+| **Waypoint Z-Order** | Planning paths now render above all map icons |
+| **Ruler Positioning** | Adjusted bottom spacing for better visibility |
+| **UI Cleanup** | Removed debug POI counter from toolbar |
 
 ---
 
