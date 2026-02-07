@@ -5,6 +5,7 @@
 ```
 Link18/
 ├── main.py              # Core overlay + network logic 
+├── jdamertti.py         # Standalone JDAM physics simulator
 ├── web_server.py        # Flask server for web map API
 ├── auto_calibrate_new.py# Map calibration logic (CV-based)
 ├── create_release.py    # Release automation script
@@ -15,6 +16,18 @@ Link18/
 ├── Link18.spec          # PyInstaller build spec
 └── requirements.txt     # Python dependencies
 ```
+
+### JDAM Simulation Architecture (`jdamertti.py`)
+
+The GBU-62/JDAM-ER simulation is now a self-contained module:
+- **Physics**: Implements 3-DOF kinematics with drag/lift modulation.
+- **Modes**:
+    - **Steep Dive**: High-drag/high-AOA mode for short-range drops.
+    - **Max Range**: Glide-optimization mode for long-distance strikes.
+    - **Standard**: Balanced profile.
+- **Integration**: `main.py` instantiates `BombTracker` which manages multiple `GBU62_Simulator` instances.
+- **Tuning**: All physics constants (Drag, Lift, Pitch Schedules) are defined at the top of `jdamertti.py`.
+
 
 ### Architecture Overview
 

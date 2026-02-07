@@ -34,6 +34,27 @@ MapObjects/
 Mapinfo/
 Mission/
 State/
+analyze_data.py
+generate_graphs.py
+test_integration.py
+test_multi.py
+validation_suite.py
+test_cases.json
+trajectory_graphs/
+airfields.json
+
+# Obsolete / Merged Scripts
+sim_params.py
+debug_sim.py
+test_steep.py
+test_multi.py
+analyze_data.py
+generate_graphs.py
+test_integration.py
+validation_suite.py
+scrape_vehicles.py
+test_cases.json
+trajectory_graphs/
 
 # Logs and temp
 *.log

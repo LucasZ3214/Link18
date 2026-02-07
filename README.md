@@ -1,4 +1,4 @@
-# Link18 v1.4.0 - Tactical Overlay for War Thunder
+# Link18 v1.5.0 - Tactical Overlay for War Thunder
 
 **Link18** is a transparent tactical overlay and web-based map for War Thunder that enables real-time squad coordination via shared markers, flight timers, and NATO-standard unit symbology.
 
@@ -10,6 +10,14 @@
 2. Switch to War Thunder (Borderless Window mode)
 3. Hold **M** to show overlay
 4. Open `http://localhost:8000` for the web map
+
+---
+
+## What's New in v1.5.0
+
+| Feature | Description |
+|---------|-------------|
+| **GBU HUD** | GBU-62 JDAM-ER TOT/TTI Timer |[BETA]
 
 ---
 

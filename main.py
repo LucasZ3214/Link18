@@ -14,6 +14,7 @@ from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QFont, QPolygonF, QFontM
 from pynput import keyboard
 from auto_calibrate_new import auto_calibrate_map_v2  # Import new calibration logic
 import web_server # Import Web Server Module
+from jdamertti import BombTracker # Import BombTracker
 
 # Configuration
 # Load Configuration
@@ -51,6 +52,8 @@ class KeyMonitor(QObject):
     debug_signal = pyqtSignal()
     broadcast_airfields_signal = pyqtSignal()  # New signal for manual broadcast
     calibrate_signal = pyqtSignal()  # New signal for calibration
+    bomb_release_signal = pyqtSignal() # Signal for bomb release
+    toggle_console_signal = pyqtSignal() # Signal for console toggle
 
     def __init__(self, activation_key='m'):
         super().__init__()
@@ -70,8 +73,10 @@ class KeyMonitor(QObject):
                     # If M is held and N is pressed, trigger calibration
                     if self.is_pressed:
                         self.calibrate_signal.emit()
-                    # REMOVED: Standalone N press no longer toggles debug mode
-                    # Debug mode is now controlled solely by config.json
+                elif key.char.lower() == 'j':
+                    self.toggle_console_signal.emit()
+            elif key == keyboard.Key.space:
+                self.bomb_release_signal.emit()
         except AttributeError:
             pass
 
@@ -148,6 +153,11 @@ class OverlayWindow(QMainWindow):
         
         self.show_formation_mode = False # Toggle state for Formation Info
         
+        # Bomb Tracker & Console
+        self.bomb_tracker = BombTracker()
+        self.show_console = False
+        self.current_pitch = 0.0 # From indicators
+        
         # Persistence for Airfield Altitude
         self.known_airfields = self.load_airfields()
         
@@ -155,6 +165,7 @@ class OverlayWindow(QMainWindow):
         self.status_text = "Initializing..."
         self.status_color = Qt.GlobalColor.yellow
         self.overlay_enabled = True # Added toggle state
+        self.show_gbu_timers = True # Global GBU timer toggle
         
         # Networking
         self.net_thread = NetworkReceiver()
@@ -277,6 +288,7 @@ class OverlayWindow(QMainWindow):
         
         # Load Vehicle Map
         self.vehicle_map = self.load_vehicle_names()
+
 
         
         # Debug overlay
@@ -758,6 +770,17 @@ class OverlayWindow(QMainWindow):
                 
                 # Periodically refresh map bounds (handle tactical zoom)
                 current_time = time.time()
+                
+                # Update JDAM state
+                self.bomb_tracker.update()
+                
+                # Cleanup Shared Data (POIs/Players)
+                expired_pids = [pid for pid, poi in self.shared_pois.items() if (current_time - poi.get('last_seen', 0) > 20)]
+                for pid in expired_pids: del self.shared_pois[pid]
+                
+                inactive_players = [pid for pid, p in self.players.items() if pid != '_local' and (current_time - p.get('last_seen', 0) > 30)]
+                for pid in inactive_players: del self.players[pid]
+                
                 last_map_sync = getattr(self, 'last_map_sync_time', 0)
                 if self.map_min is None or (current_time - last_map_sync) > 8.0:
                     if self.map_min is None:
@@ -789,6 +812,7 @@ class OverlayWindow(QMainWindow):
                     if ind_resp.status_code == 200:
                         ind_data = ind_resp.json()
                         v_type = ind_data.get('type', '')
+                        self.current_pitch = ind_data.get('aviahorizon_pitch', 0.0)
                         if v_type:
                             # Resolve using map
                             # Handle potential casing issues or underscores? The map keys are lower case/raw.
@@ -1686,7 +1710,8 @@ class OverlayWindow(QMainWindow):
         painter.drawPath(path)
         
         # 3. Center Player Arrow (Fixed Up)
-        painter.setBrush(QColor(255, 255, 0)) 
+        config_color = QColor(CONFIG.get('color', '#FFFF00'))
+        painter.setBrush(QBrush(config_color)) 
         scale = 1.5
         
         path = QPainterPath()
@@ -1851,7 +1876,8 @@ class OverlayWindow(QMainWindow):
                     table_center_x = self.width() - 20 - 178
                     self.draw_formation_panel(painter, table_center_x, ry + 120, others)
 
-            return
+            # Removed return to allow JDAM overlay to draw
+            # return
 
         # --- Full Map Mode ---
 
@@ -2414,6 +2440,11 @@ class OverlayWindow(QMainWindow):
             painter.drawText(int(bar_x + bar_width - tw), int(map_label_y), label)
 
 
+
+
+
+
+
             # --- Draw SPAA Radius Circles (4.5km) ---
             if hasattr(self, 'map_ground_units') and self.map_ground_units:
                 # Cluster SPAA units
@@ -2515,9 +2546,20 @@ class OverlayWindow(QMainWindow):
 
             # --- Draw Shared POIs ---
             if self.shared_pois:
-                # Cleanup expired POIs (older than 60s)
+                # Cleanup expired POIs (older than 20s or owner offline)
                 current_time = time.time()
-                expired_pids = [pid for pid, poi in self.shared_pois.items() if current_time - poi.get('last_seen', 0) > 60]
+                expired_pids = []
+                for pid, poi in self.shared_pois.items():
+                    # Check direct timeout
+                    if current_time - poi.get('last_seen', 0) > 20:
+                        expired_pids.append(pid)
+                        continue
+                    
+                    # Check owner connectivity
+                    player = self.players.get(pid)
+                    if not player or (current_time - player.get('last_seen', 0) > 30):
+                        expired_pids.append(pid)
+
                 for pid in expired_pids:
                     del self.shared_pois[pid]
                     
@@ -2641,6 +2683,15 @@ class OverlayWindow(QMainWindow):
             )
             
             # Removed center crosshair as requested
+
+        # --- DRAW JDAM OVERLAY (Always on top, unconditional) ---
+        self.draw_tti(painter)
+        
+        # if self.bomb_tracker.get_active_bombs():
+        #      self.draw_graph(painter)
+
+        # if self.show_console or self.bomb_tracker.get_active_bombs():
+        #     self.draw_console(painter)
 
     def draw_formation_panel(self, painter, cx, top_y, others):
         """Draws a list of nearby players under the compass"""
@@ -2779,6 +2830,404 @@ class OverlayWindow(QMainWindow):
 
 
 
+    def toggle_console(self):
+        self.show_console = not self.show_console
+        print(f"[UI] Console Output: {self.show_console}")
+        self.update()
+
+    def get_target_distance(self):
+        """Logic to determine current target distance in meters"""
+        wp = None
+        if hasattr(self, 'pois') and self.pois:
+            wp = self.pois[-1] 
+        elif hasattr(self, 'map_objectives') and self.map_objectives:
+            wp = self.map_objectives[-1] 
+        elif hasattr(self, 'user_pois') and self.user_pois:
+            wp = self.user_pois[-1] 
+        elif self.planning_waypoints and self.map_bounds:
+            wp = self.planning_waypoints[-1] 
+            
+        if wp:
+            local_p = self.players.get('_local')
+            if local_p:
+                dx = wp['x'] - local_p['x']
+                dy = wp['y'] - local_p['y']
+                dist_norm = math.hypot(dx, dy)
+                
+                map_size_m = float(CONFIG.get('map_size_meters', 65000))
+                if self.map_max and self.map_min:
+                    width_m = self.map_max[0] - self.map_min[0]
+                    height_m = self.map_max[1] - self.map_min[1]
+                    map_size_m = max(width_m, height_m)
+                    
+                return dist_norm * map_size_m
+        return None
+
+    def on_bomb_release(self):
+        # Determine Target Distance
+        target_dist_m = self.get_target_distance()
+        if target_dist_m is None:
+             target_dist_m = 15000.0  # Default fallback
+        
+        # Determine current telemetry
+        altitude = self.current_altitude
+        speed_tas = self.current_speed
+        pitch = self.current_pitch
+        
+        # Record and simulate
+        self.bomb_tracker.add_bomb(altitude, speed_tas, pitch, 0, target_dist_m)
+        self.update()
+
+    def draw_tti(self, painter):
+        if not getattr(self, 'show_gbu_timers', True):
+            return
+            
+        active_bombs = self.bomb_tracker.get_active_bombs()
+        
+        # Mode Shorthands
+        shorthands = {
+            'STEEP_DIVE': 'S',
+            'MAX_RANGE': 'M',
+            'LOW_ENERGY': 'L',
+            'STANDARD': 'D'
+        }
+
+        num_bombs = len(active_bombs)
+        
+        # Layout Logic: 8 Bombs per column
+        # Col 0: Pre-drop + Bombs 0-7
+        # Col 1: Bombs 8-15
+        # ...
+        bombs_per_col = 8
+        cols = math.ceil(num_bombs / bombs_per_col)
+        if cols < 1: cols = 1
+        
+        # Dimensions
+        col_width = 260 if cols == 1 else 240 # Wider for single column
+        w = (col_width * cols) + 10
+        
+        # Calculate height
+        # Max rows = 1 (Header) + 8 (Bombs) = 9
+        max_rows = bombs_per_col + 1
+        num_visual_rows = num_bombs + 1 if cols == 1 else max_rows
+        
+        h = 10 + (num_visual_rows * 25)
+        x = self.width() - w - 50 # Constant margin
+        y = 280
+        
+        # Background Box
+        painter.setBrush(QColor(0, 0, 0, 180))
+        painter.setPen(QPen(QColor(0, 255, 0), 1))
+        painter.drawRoundedRect(x, y, w, h, 5, 5)
+        
+        # List
+        painter.setFont(QFont("Consolas", 11, QFont.Weight.Bold))
+        
+        # 0. Draw PRE-DROP Line
+        dist_m = self.get_target_distance()
+        if dist_m:
+            sim = self.bomb_tracker.simulator
+            sos = sim.get_sound_speed(self.current_altitude)
+            mach = (self.current_speed / 3.6) / sos
+            mode, _, _ = sim.detect_flight_mode(self.current_altitude, mach, dist_m)
+            tti, _ = sim.run(self.current_altitude, mach, dist_m)
+            
+            # Short form mode
+            mode_short = shorthands.get(mode, mode[:1])
+            error_margin = tti * 0.05
+            pre_text = f"[{mode}]: {tti:.0f}s (± {error_margin:.1f}s)"
+            
+            painter.setPen(QColor(0, 255, 255)) # Cyan for Pre-drop
+            painter.drawText(x + 10, y + 20, pre_text)
+        else:
+            painter.setPen(QColor(150, 150, 150))
+            painter.drawText(x + 10, y + 20, "PRE: NO TARGET")
+
+        # 1. Draw Active Bombs
+        for i, b in enumerate(active_bombs):
+            # i is 0-indexed bomb counter
+            col = i // bombs_per_col
+            row = (i % bombs_per_col) + 1 # +1 to skip header row
+            
+            mode_raw = b.get('mode', 'N/A')
+            mode_short = shorthands.get(mode_raw, mode_raw[:1])
+            
+            # Simplified ID for compact view
+            bomb_id = str(b.get('id', i+1))
+            
+            if b['remaining'] <= 0:
+                text = f"{bomb_id} [X]: IMPACT"
+                color = QColor(255, 50, 50)
+            else:
+                error_margin = b['total_tti'] * 0.05
+                text = f"{bomb_id} [{mode_short}]: T-{b['remaining']:.0f}s (± {error_margin:.1f}s)"
+                color = QColor(50, 255, 50)
+                
+            draw_x = x + 10 + (col * col_width)
+            draw_y = y + 20 + (row * 25)
+            
+            painter.setPen(color)
+            painter.drawText(draw_x, draw_y, text)
+            
+    def draw_graph(self, painter):
+        """Draws the Altitude vs Distance graph for the active bomb"""
+        active_bombs = self.bomb_tracker.bombs # Access directly for history
+        if not active_bombs: return
+        
+        bomb = active_bombs[0]
+        history = bomb.get('history', [])
+        if not history: return
+        
+        # Dimensions
+        g_w = 400
+        g_h = 150
+        # Move to Left Side to avoid Compass (Right)
+        g_x = 20 
+        g_y = 100 # Below Status Text
+        
+        # Background
+        painter.setBrush(QColor(0, 0, 0, 180))
+        painter.setPen(QPen(QColor(255, 255, 255), 1))
+        painter.drawRect(g_x, g_y, g_w, g_h)
+        
+        # Find Max values for scaling
+        max_dist = 1
+        max_alt = 1
+        
+        # History format: (time, dist_x, alt_y, velocity)
+        # x starts at 0, target is at 'dist'
+        target_dist = bomb['telem']['dist']
+        launch_alt = bomb['telem']['alt']
+        
+        max_dist = target_dist * 1.1 # 10% margin
+        max_alt = launch_alt * 1.1
+        
+        # Draw Axis Labels
+        painter.setFont(QFont("Arial", 8))
+        painter.setPen(QColor(200, 200, 200))
+        painter.drawText(g_x + 5, g_y + 15, f"{int(max_alt)}m") # Top Left (Y Axis)
+        painter.drawText(g_x + g_w - 40, g_y + g_h - 5, f"{int(max_dist/1000)}km") # Bottom Right (X Axis)
+        
+        # Draw Trajectory with Phase Colors (Segments)
+        # History format: (time, dist_x, alt_y, velocity, phase, gamma, alpha)
+        
+        phase_colors = {
+            "RELEASE": QColor(255, 255, 255),
+            "BALLISTIC": QColor(200, 200, 200), # Gray
+            "LOFT": QColor(0, 255, 255),        # Cyan
+            "GLIDE": QColor(0, 255, 0),         # Green
+            "GUIDANCE": QColor(255, 0, 255)     # Magenta
+        }
+        
+        # Origin (Start of graph)
+        # Screen Y = (g_y + g_h) - (h / max_alt) * g_h
+        
+        prev_pt = None
+        for i in range(len(history)):
+            pt_data = history[i]
+            t, dist_x, alt_y, v = pt_data[0], pt_data[1], pt_data[2], pt_data[3]
+            
+            # Map to Screen
+            if max_dist == 0: continue
+            sx = g_x + (dist_x / max_dist) * g_w
+            sy = (g_y + g_h) - (alt_y / max_alt) * g_h
+            current_pt = QPointF(sx, sy)
+            
+            if prev_pt:
+                color = QColor(255, 255, 0) # Default
+                if len(pt_data) > 4:
+                    phase = pt_data[4]
+                    color = phase_colors.get(phase, color)
+                
+                painter.setPen(QPen(color, 2))
+                painter.drawLine(prev_pt, current_pt)
+            
+            prev_pt = current_pt
+            
+        # Draw "Live" Bomb Position
+        elapsed = time.time() - bomb['release_time']
+        
+        # Find closest history point
+        closest_pt = None
+        for pt in history:
+            if pt[0] >= elapsed:
+                closest_pt = pt
+                break
+        
+        # If simulation ended, stick to last point
+        if not closest_pt and history:
+            closest_pt = history[-1]
+            
+        if closest_pt:
+            t, dist_x, alt_y, v = closest_pt[0], closest_pt[1], closest_pt[2], closest_pt[3]
+            sx = g_x + (dist_x / max_dist) * g_w
+            sy = (g_y + g_h) - (alt_y / max_alt) * g_h
+            
+            # Draw Bomb Icon
+            painter.setBrush(QColor(255, 50, 50))
+            painter.drawEllipse(QPointF(sx-3, sy-3), 6, 6)
+            
+            # Draw Velocity Vector & Attitude if available
+            if len(closest_pt) > 6:
+                phase = closest_pt[4]
+                gamma = closest_pt[5] # Radians
+                alpha = closest_pt[6] # Radians
+                pitch = gamma + alpha
+                
+                # Velocity Vector (Cyan)
+                vx_len = 25 * math.cos(-gamma) 
+                vy_len = 25 * math.sin(-gamma)
+                painter.setPen(QPen(QColor(0, 255, 255), 1)) 
+                painter.drawLine(int(sx), int(sy), int(sx + vx_len), int(sy + vy_len))
+                
+                # Body Axis (Salmon/Red)
+                bx_len = 20 * math.cos(-pitch)
+                by_len = 20 * math.sin(-pitch)
+                painter.setPen(QPen(QColor(255, 100, 100), 2)) 
+                painter.drawLine(int(sx), int(sy), int(sx + bx_len), int(sy + by_len))
+                
+                # Info Text
+                painter.setFont(QFont("Consolas", 9, QFont.Weight.Bold))
+                painter.setPen(QColor(255, 255, 255))
+                painter.drawText(int(sx) + 10, int(sy) - 15, f"T-{closest_pt[0]:.1f}s | {phase}")
+                painter.setFont(QFont("Consolas", 8))
+                painter.drawText(int(sx) + 10, int(sy) - 2, f"M{v/340:.2f} | AoA: {math.degrees(alpha):.1f}°")
+                painter.drawText(int(sx) + 10, int(sy) + 10, f"Alt: {alt_y:.0f}m")
+            else:
+                 painter.setPen(QColor(255, 255, 255))
+                 painter.drawText(int(sx) + 10, int(sy), f"T+{t:.1f}s")
+
+    def draw_attitude_diagram(self, painter, bomb):
+        """Draws a detailed attitude indicator for the bomb"""
+        history = bomb.get('history', [])
+        if not history: return
+
+        # Dimensions & Position (Bottom Right)
+        w = 200
+        h = 200
+        x = self.width() - w - 20
+        y = self.height() - h - 20
+        
+        # Background
+        painter.setBrush(QColor(0, 0, 0, 180))
+        painter.setPen(QPen(QColor(255, 255, 255), 2))
+        painter.drawRect(x, y, w, h)
+        
+        # Center
+        cx = x + w / 2
+        cy = y + h / 2
+        
+        # Get Current Telemetry from History
+        elapsed = time.time() - bomb['release_time']
+        closest_pt = None
+        for pt in history:
+            if pt[0] >= elapsed:
+                closest_pt = pt
+                break
+        if not closest_pt and history: closest_pt = history[-1]
+        
+        if not closest_pt: return
+        
+        # Data: t, dist_x, alt_y, v, phase, gamma, alpha
+        # Handling potential missing data if history format changed mid-run
+        if len(closest_pt) > 6:
+            t = closest_pt[0]
+            v = closest_pt[3]
+            phase = closest_pt[4]
+            gamma = closest_pt[5] # Radians (Flight Path Angle)
+            alpha = closest_pt[6] # Radians (Angle of Attack)
+            pitch = gamma + alpha # Pitch Attitude
+            
+            # --- Visuals ---
+            
+            painter.save()
+            painter.translate(cx, cy)
+            
+            # Draw Horizon Line (White)
+            painter.setPen(QPen(QColor(100, 100, 100), 1, Qt.PenStyle.DashLine))
+            painter.drawLine(-90, 0, 90, 0) # Horizon
+            
+            # Rotate to Bomb Pitch
+            pitch_deg = math.degrees(pitch)
+            painter.rotate(-pitch_deg) # Negative because screen Y is down
+            
+            # Draw Bomb Body
+            painter.setPen(QPen(QColor(255, 255, 255), 3))
+            painter.drawLine(-40, 0, 40, 0) # Fuselage
+            # Fins
+            painter.drawLine(-40, 0, -50, -10)
+            painter.drawLine(-40, 0, -50, 10)
+            
+            # Draw Velocity Vector relative to Body
+            # V vector is at -alpha relative to body
+            alpha_deg = math.degrees(alpha)
+            painter.rotate(alpha_deg) 
+            
+            painter.setPen(QPen(QColor(0, 255, 255), 2)) # Cyan
+            painter.drawLine(0, 0, 60, 0) # Velocity Vector
+            painter.drawText(65, 5, "V")
+            
+            painter.restore()
+            
+            # 2. Text Data
+            painter.setFont(QFont("Consolas", 10, QFont.Weight.Bold))
+            painter.setPen(QColor(255, 255, 255))
+            
+            # Phase
+            painter.drawText(x + 10, y + 20, f"PHASE: {phase}")
+            
+            # Telemetry
+            painter.setFont(QFont("Consolas", 9))
+            painter.drawText(x + 10, y + 40, f"TIME: {t:.1f}s")
+            painter.drawText(x + 10, y + 55, f"MACH: {v/340:.2f}")
+            painter.drawText(x + 10, y + 70, f"AoA : {math.degrees(alpha):.1f}°")
+            painter.drawText(x + 10, y + 85, f"PITCH: {pitch_deg:.1f}°")
+            
+            # 3. G-Load Bar (AoA)
+            bar_w = 15
+            bar_h = 80
+            bx = x + w - 25
+            by = y + 40
+            
+            painter.setPen(QColor(100, 100, 100))
+            painter.drawRect(bx, by, bar_w, bar_h)
+            
+            # Fill relative to max AoA (22 deg)
+            fill_h = (max(0, math.degrees(alpha)) / 22.0) * bar_h
+            if fill_h > bar_h: fill_h = bar_h
+            
+            c = QColor(0, 255, 0)
+            if math.degrees(alpha) > 10: c = QColor(255, 255, 0)
+            if math.degrees(alpha) > 18: c = QColor(255, 0, 0)
+            
+            painter.setBrush(c)
+            painter.drawRect(bx, by + bar_h - int(fill_h), bar_w, int(fill_h))
+            painter.drawText(bx-5, by + bar_h + 15, "AoA")
+
+    def draw_console(self, painter):
+        # Draw a semi-transparent background box at MID RIGHT
+        w = 400
+        h = 250
+        x = self.width() - w - 20
+        y = 300 
+        
+        painter.setBrush(QColor(0, 0, 0, 180))
+        painter.setPen(QPen(QColor(255, 255, 255), 1))
+        painter.drawRect(x, y, w, h)
+        
+        # Draw Logs
+        logs = self.bomb_tracker.get_logs()
+        font = QFont("Consolas", 10)
+        painter.setFont(font)
+        painter.setPen(QColor(200, 200, 200))
+        
+        line_h = 15
+        cur_y = y + 20
+        
+        for log in logs[-15:]: # Show last ~15 lines to fit
+            painter.drawText(x + 10, cur_y, log)
+            cur_y += line_h
+
 def print_welcome():
     """Display welcome screen with ASCII art logo"""
     welcome = """\r
@@ -2830,7 +3279,7 @@ class ControllerWindow(QWidget):
         from PyQt6.QtWidgets import QCheckBox
         self.overlay_toggle = QCheckBox("Enable Map Overlay (Screen)")
         self.overlay_toggle.setChecked(CONFIG.get('default_map_visible', True))
-        self.overlay_toggle.setStyleSheet("font-weight: bold; margin: 10px;")
+        self.overlay_toggle.setStyleSheet("font-weight: bold; margin: 10px; color: black;")
         self.overlay_toggle.stateChanged.connect(self.toggle_overlay)
         layout.addWidget(self.overlay_toggle, 0, Qt.AlignmentFlag.AlignCenter)
         
@@ -2839,9 +3288,16 @@ class ControllerWindow(QWidget):
         # Default to False or whatever the overlay has. 
         # But wait, overlay defaults to False. Let's assume False.
         self.formation_toggle.setChecked(False) 
-        self.formation_toggle.setStyleSheet("font-weight: bold; margin: 10px; color: #cc88ff;")
+        self.formation_toggle.setStyleSheet("font-weight: bold; margin: 10px; color: black;")
         self.formation_toggle.stateChanged.connect(self.toggle_formation)
         layout.addWidget(self.formation_toggle, 0, Qt.AlignmentFlag.AlignCenter)
+        
+        # GBU Timers Toggle
+        self.gbu_toggle = QCheckBox("Enable GBU Timers (BETA)")
+        self.gbu_toggle.setChecked(True)
+        self.gbu_toggle.setStyleSheet("font-weight: bold; margin: 10px; color: black;")
+        self.gbu_toggle.stateChanged.connect(self.toggle_gbu)
+        layout.addWidget(self.gbu_toggle, 0, Qt.AlignmentFlag.AlignCenter)
         
         shutdown_btn = QPushButton("TERMINATE LINK18")
         shutdown_btn.setStyleSheet("background-color: #ff4444; color: white; padding: 10px; font-weight: bold; border-radius: 4px;")
@@ -2859,6 +3315,11 @@ class ControllerWindow(QWidget):
         enabled = (state == 2)
         self.overlay.show_formation_mode = enabled
         print(f"[CONTROLLER] Formation Mode {'ENABLED' if enabled else 'DISABLED'}")
+
+    def toggle_gbu(self, state):
+        enabled = (state == 2)
+        self.overlay.show_gbu_timers = enabled
+        print(f"[CONTROLLER] GBU Timers {'ENABLED' if enabled else 'DISABLED'}")
         
     def closeEvent(self, event):
         # Close the overlay when controller is closed
@@ -2896,6 +3357,8 @@ def main():
         monitor.debug_signal.connect(overlay.toggle_debug)
         monitor.broadcast_airfields_signal.connect(overlay.broadcast_airfields)  # Connect B key to broadcast
         monitor.calibrate_signal.connect(overlay.trigger_calibration)  # Connect M+N to calibration
+        monitor.bomb_release_signal.connect(overlay.on_bomb_release) # Connect Spacebar
+        monitor.toggle_console_signal.connect(overlay.toggle_console) # Connect J key
         
         sys.exit(app.exec())
     except Exception as e:
@@ -2904,4 +3367,4 @@ def main():
         input("Critical Error! Press Enter to close...")
 
 if __name__ == "__main__":
-    main()
+    main()                               
