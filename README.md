@@ -17,7 +17,7 @@
 
 | Feature | Description |
 |---------|-------------|
-| **GBU HUD** | GBU-62 JDAM-ER TOT/TTI Timer |[BETA]
+| **GBU HUD** | GBU-62 JDAM-ER TOT/TTI Timer[BETA] |
 
 ---
 
