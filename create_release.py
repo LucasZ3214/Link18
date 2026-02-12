@@ -36,7 +36,7 @@ def build_executable():
         return False
 
 def create_release():
-    release_name = "Link18_v1.5.0.zip"
+    release_name = "Link18_v1.6.0.zip"
     
     # 0. Build
     if not build_executable():
@@ -92,7 +92,18 @@ def create_release():
                 for root, dirs, files in os.walk("web"):
                     for file in files:
                         file_path = os.path.join(root, file)
-                        # Keep relative path in zip
+                        arcname = os.path.relpath(file_path, ".")
+                        zipf.write(file_path, arcname)
+            
+            # Add sounds folder (exclude welcome/ user sounds)
+            if os.path.exists("sounds"):
+                print("  Adding sounds/ directory...")
+                for root, dirs, files in os.walk("sounds"):
+                    # Skip user welcome sounds
+                    if "welcome" in root:
+                        continue
+                    for file in files:
+                        file_path = os.path.join(root, file)
                         arcname = os.path.relpath(file_path, ".")
                         zipf.write(file_path, arcname)
                     

@@ -15,6 +15,7 @@ from pynput import keyboard
 from auto_calibrate_new import auto_calibrate_map_v2  # Import new calibration logic
 import web_server # Import Web Server Module
 from jdamertti import BombTracker # Import BombTracker
+from vws import SoundManager # Import VWS
 
 # Configuration
 # Load Configuration
@@ -112,6 +113,66 @@ class NetworkReceiver(QThread):
                 print(f"UDP Recv Error: {e}")
                 time.sleep(1)
 
+class TelemetryFetcher(QThread):
+    """Background thread for HTTP polling - prevents audio stutter"""
+    data_ready = pyqtSignal(dict)  # Emits all fetched data
+    
+    def __init__(self, api_url, poll_interval_s=0.1):
+        super().__init__()
+        self.api_url = api_url
+        self.poll_interval = poll_interval_s
+        self._running = True
+    
+    def run(self):
+        while self._running:
+            result = {
+                'map_data': None,
+                'state_data': None,
+                'indicator_data': None,
+                'map_info': None,
+            }
+            
+            try:
+                # Fetch main map data
+                resp = requests.get(self.api_url, timeout=0.3)
+                if resp.status_code == 200:
+                    result['map_data'] = resp.json()
+            except:
+                pass
+            
+            try:
+                # Fetch state (altitude, speed)
+                resp = requests.get("http://127.0.0.1:8111/state", timeout=0.1)
+                if resp.status_code == 200:
+                    result['state_data'] = resp.json()
+            except:
+                pass
+            
+            try:
+                # Fetch indicators (vehicle type, pitch)
+                resp = requests.get("http://127.0.0.1:8111/indicators", timeout=0.1)
+                if resp.status_code == 200:
+                    result['indicator_data'] = resp.json()
+            except:
+                pass
+            
+            try:
+                # Fetch map info (bounds, grid)
+                resp = requests.get("http://127.0.0.1:8111/map_info.json", timeout=0.2)
+                if resp.status_code == 200:
+                    result['map_info'] = resp.json()
+            except:
+                pass
+            
+            # Emit all data at once (thread-safe via signal)
+            if result['map_data'] is not None:
+                self.data_ready.emit(result)
+            
+            time.sleep(self.poll_interval)
+    
+    def stop(self):
+        self._running = False
+
 class OverlayWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -141,8 +202,15 @@ class OverlayWindow(QMainWindow):
         self.user_pois = [] # List of user-created POIs (Web/Shared)
         self.shared_pois = {} # POIs shared by other players
         self.pois_broadcasted = False # Track if we've broadcasted POIs this session
+        
+        # Physics Cache (Optimize Render Loop)
+        self.cached_predrop_text = None
+        self.cached_predrop_color = QColor(150, 150, 150)
+        self.cached_predrop_mode = "N/A"
+        
         self.team_chat_messages = [] # Received team chat messages from network
         self.last_chat_id = 0 # Track last processed chat message ID
+        self._last_log_t = 0 # Timer for diagnostic logging
         self.local_chat_cache = []  # Cache of local messages from 8111 API (for deduplication)
         self.map_calibrated = False # Track if map has been calibrated
         self.calibration_status = "" # Status message for calibration
@@ -157,6 +225,23 @@ class OverlayWindow(QMainWindow):
         self.bomb_tracker = BombTracker()
         self.show_console = False
         self.current_pitch = 0.0 # From indicators
+        
+        # --- VWS ---
+        vws_vol = float(self.config.get('vws_volume', 1.0))
+        vws_int = float(self.config.get('vws_interval', 5.0))
+        vws_norm = self.config.get('vws_normalize', False)
+        vws_enabled = self.config.get('enable_vws', True)
+        self.vws = SoundManager(volume=vws_vol, normalize=vws_norm, enabled=vws_enabled)
+        self.vws.set_interval(vws_int)
+        
+        # Play Startup Sequence
+        self.vws.play_warning('STARTUP')
+        QTimer.singleShot(2000, lambda: self.vws.play_warning('WELCOME'))
+        
+        # Physics Timer (10Hz - Decoupled from Render)
+        self.phys_timer = QTimer(self)
+        self.phys_timer.timeout.connect(self.update_physics)
+        self.phys_timer.start(100)
         
         # Persistence for Airfield Altitude
         self.known_airfields = self.load_airfields()
@@ -250,12 +335,14 @@ class OverlayWindow(QMainWindow):
         
         self.show()
 
-        # Data polling timer
+        # Data fetching (background thread - no main thread blocking)
+        self.telem_fetcher = TelemetryFetcher(API_URL, poll_interval_s=POLL_INTERVAL_MS / 1000.0)
+        self.telem_fetcher.data_ready.connect(self.on_telemetry_data)
+        self.telem_fetcher.start()
+        
+        # Lightweight timer for non-HTTP tasks only
         self.timer = QTimer()
-        self.timer = QTimer()
-        self.timer.timeout.connect(self.update_telemetry)
-        self.timer.timeout.connect(self.process_web_commands) # Check for web commands each tick
-        self.timer.start(POLL_INTERVAL_MS)
+        self.timer.timeout.connect(self.process_web_commands)
         self.timer.start(POLL_INTERVAL_MS)
         
         # Chat polling timer (every 2 seconds)
@@ -317,11 +404,7 @@ class OverlayWindow(QMainWindow):
         else:
             print("[WEB] Web Map disabled via config")
         
-    def toggle_debug(self):
-        self.show_debug = not self.show_debug
-        state = "ON" if self.show_debug else "OFF"
-        self.status_text = f"Debug: {state}"
-        self.update()
+        # toggle_debug Removed
         
     def update_network_data(self, packet):
         pid = packet.get('id')
@@ -390,15 +473,18 @@ class OverlayWindow(QMainWindow):
             new_x = packet.get('x')
             new_y = packet.get('y')
             
+            # Use sender (callsign) as key to enforce ONE POI per user
+            sender_key = packet.get('sender', packet.get('callsign', pid))
+            
             # Check if position changed
             position_changed = True
-            if pid in self.shared_pois:
-                old_x = self.shared_pois[pid]['x']
-                old_y = self.shared_pois[pid]['y']
+            if sender_key in self.shared_pois:
+                old_x = self.shared_pois[sender_key]['x']
+                old_y = self.shared_pois[sender_key]['y']
                 if abs(old_x - new_x) < 0.001 and abs(old_y - new_y) < 0.001:
                     position_changed = False
             
-            self.shared_pois[pid] = {
+            self.shared_pois[sender_key] = {
                 'x': new_x,
                 'y': new_y,
                 'color': QColor(packet.get('color', '#FFFFFF')),
@@ -410,7 +496,7 @@ class OverlayWindow(QMainWindow):
             
             # Only log when position changes
             if position_changed:
-                print(f"[POI RX] {pid}: {packet.get('icon')} at ({new_x}, {new_y})")
+                print(f"[POI RX] {sender_key}: {packet.get('icon')} at ({new_x}, {new_y})")
                 print(f"[POI RX] Total POIs stored: {len(self.shared_pois)}")
             return
         
@@ -715,7 +801,7 @@ class OverlayWindow(QMainWindow):
     def get_reference_grid_data(self):
         try:
             # Use 127.0.0.1 to avoid localhost resolution issues on Windows
-            info_resp = requests.get("http://127.0.0.1:8111/map_info.json", timeout=2.0)
+            info_resp = requests.get("http://127.0.0.1:8111/map_info.json", timeout=0.15)
             if info_resp.status_code != 200:
                 if DEBUG_MODE:
                     print(f"Sync Failed: HTTP {info_resp.status_code}")
@@ -757,134 +843,114 @@ class OverlayWindow(QMainWindow):
             # print(f"[DEBUG] Map Bounds Refreshed: {self.map_min} to {self.map_max}")
         return ref_data
 
-    def update_telemetry(self):
+    def on_telemetry_data(self, fetched):
+        """Process pre-fetched telemetry data (called from background thread signal)"""
         try:
-            # Increase timeout to handle game stutter (especially during map loading/zoom)
-            response = requests.get(API_URL, timeout=0.5)
-            if response.status_code == 200:
-                was_disconnected = self.status_text.startswith("Init") or "Error" in self.status_text or "Searching" in self.status_text
-                if was_disconnected:
-                     self.status_text = "8111: OK"
-                     self.status_color = Qt.GlobalColor.green
-                     print("[STATUS] Connected to War Thunder API (8111)")
+            data = fetched.get('map_data')
+            if data is None:
+                return
                 
-                # Periodically refresh map bounds (handle tactical zoom)
-                current_time = time.time()
-                
-                # Update JDAM state
-                self.bomb_tracker.update()
-                
-                # Cleanup Shared Data (POIs/Players)
-                expired_pids = [pid for pid, poi in self.shared_pois.items() if (current_time - poi.get('last_seen', 0) > 20)]
-                for pid in expired_pids: del self.shared_pois[pid]
-                
-                inactive_players = [pid for pid, p in self.players.items() if pid != '_local' and (current_time - p.get('last_seen', 0) > 30)]
-                for pid in inactive_players: del self.players[pid]
-                
-                last_map_sync = getattr(self, 'last_map_sync_time', 0)
-                if self.map_min is None or (current_time - last_map_sync) > 8.0:
-                    if self.map_min is None:
-                        print("[STATUS] Syncing map reference data...")
-                    self.refresh_map_bounds()
-                    self.last_map_sync_time = current_time
-
-                # Auto-broadcast airfields periodically (every 30s)
-                last_af_broadcast = getattr(self, 'last_af_broadcast_time', 0)
-                if self.airfields and (current_time - last_af_broadcast > 30.0):
-                    self.broadcast_airfields()
-                    self.last_af_broadcast_time = current_time
-                     
-                data = response.json()
-                
-                # Fetch altitude from /state endpoint
-                try:
-                    state_resp = requests.get("http://127.0.0.1:8111/state", timeout=0.1)
-                    if state_resp.status_code == 200:
-                        state_data = state_resp.json()
-                        self.current_altitude = state_data.get('H, m', 0)
-                        self.current_speed = state_data.get('TAS, km/h', 0)
-                except:
-                    pass  # Silently fail if state endpoint unavailable
-                
-                # Fetch indicators for Vehicle Type
-                try:
-                    ind_resp = requests.get("http://127.0.0.1:8111/indicators", timeout=0.1)
-                    if ind_resp.status_code == 200:
-                        ind_data = ind_resp.json()
-                        v_type = ind_data.get('type', '')
-                        self.current_pitch = ind_data.get('aviahorizon_pitch', 0.0)
-                        if v_type:
-                            # Resolve using map
-                            # Handle potential casing issues or underscores? The map keys are lower case/raw.
-                            # Scraper keys were stripped strings.
-                            # Let's try direct lookup first.
-                            
-                            # Scraper output keys are like 'f_2a', 'b_24d'.
-                            # v_type from indicators is 'f_2a'.
-                            
-                            real_name = self.vehicle_map.get(v_type)
-                            if not real_name:
-                                # Fallback: Try lower case if not found
-                                real_name = self.vehicle_map.get(v_type.lower())
-                                
-                            if real_name:
-                                self.current_vehicle_real_name = real_name
-                            else:
-                                # Fallback to raw type if not in map
-                                self.current_vehicle_real_name = v_type
-                            
-                            self.current_vehicle_raw_type = v_type # Store Raw Type
-                except:
-                    pass
-
-                self.process_data(data)
-
-                # Redundant map_obj fetch removed. data is already processed by self.process_data(data)
-
+            was_disconnected = self.status_text.startswith("Init") or "Error" in self.status_text or "Searching" in self.status_text
+            if was_disconnected:
+                 self.status_text = "8111: OK"
+                 self.status_color = Qt.GlobalColor.green
+                 print("[STATUS] Connected to War Thunder API (8111)")
             
-                # Merge Shared Airfields (from network)
-                # First, clean up stale shared_airfields (older than 5.0 seconds)
-                stale_timeout = 300.0
-                current_time = time.time()
-                stale_ids = [sh_id for sh_id, sh_af in self.shared_airfields.items() 
-                             if current_time - sh_af.get('last_seen', 0) > stale_timeout]
-                for sh_id in stale_ids:
-                    del self.shared_airfields[sh_id]
-                
-                if self.shared_airfields:
-                    for sh_id, sh_af in self.shared_airfields.items():
-                        # Skip airfields that we broadcasted ourselves (self-echo)
-                        if sh_af.get('sender') == CONFIG.get('callsign', 'Pilot'):
-                            continue
-                            
-                        # Deduplicate against ALL airfields (local + already-added shared)
-                        is_duplicate = False
-                        for existing_af in self.airfields:
-                            dist = math.sqrt((existing_af['x'] - sh_af['x'])**2 + (existing_af['y'] - sh_af['y'])**2)
-                            if dist < 0.05:
-                                is_duplicate = True
-                                break
-                        
-                        if not is_duplicate:
-                            self.airfields.append({
-                                'x': sh_af['x'],
-                                'y': sh_af['y'],
-                                'angle': sh_af.get('angle', 0),
-                                'len': sh_af.get('len', 0),
-                                'is_cv': sh_af.get('is_cv', False),
-                                'color': QColor(255, 128, 0),  # Orange for shared AFs
-                                'id': len(self.airfields) + 1
-                            })
-            # Removed redundant else: pass to fix SyntaxError
+            # Periodically refresh map bounds (handle tactical zoom)
+            current_time = time.time()
             
-            # --- Web Map Data Sync (CORRECT LOCATION) ---
-            # This happens AFTER all airfield/poi processing is complete
+            # Update JDAM state
+            self.bomb_tracker.update()
+            
+            # Cleanup Shared Data (POIs/Players)
+            expired_pids = [pid for pid, poi in self.shared_pois.items() if (current_time - poi.get('last_seen', 0) > 20)]
+            for pid in expired_pids: del self.shared_pois[pid]
+            
+            inactive_players = [pid for pid, p in self.players.items() if pid != '_local' and (current_time - p.get('last_seen', 0) > 30)]
+            for pid in inactive_players: del self.players[pid]
+            
+            last_map_sync = getattr(self, 'last_map_sync_time', 0)
+            if self.map_min is None or (current_time - last_map_sync) > 8.0:
+                # Process map_info from background fetch
+                map_info = fetched.get('map_info')
+                if map_info:
+                    map_min = map_info.get('map_min')
+                    map_max = map_info.get('map_max')
+                    grid_size = map_info.get('grid_size')
+                    grid_zero = map_info.get('grid_zero')
+                    if map_min and map_max and grid_size and grid_zero:
+                        self.map_min = map_min
+                        self.map_max = map_max
+                        self.grid_steps = map_info.get('grid_steps')
+                        self.grid_zero = grid_zero
+                        self.grid_size = grid_size
+                        self.map_bounds = map_info
+                        if was_disconnected:
+                            print("[STATUS] Map reference data synced.")
+                self.last_map_sync_time = current_time
+
+            # Auto-broadcast airfields periodically (every 30s)
+            last_af_broadcast = getattr(self, 'last_af_broadcast_time', 0)
+            if self.airfields and (current_time - last_af_broadcast > 30.0):
+                self.broadcast_airfields()
+                self.last_af_broadcast_time = current_time
+            
+            # Process state data (altitude, speed) - already fetched by thread
+            state_data = fetched.get('state_data')
+            if state_data:
+                self.current_altitude = state_data.get('H, m', 0)
+                self.current_speed = state_data.get('TAS, km/h', 0)
+            
+            # Process indicator data (vehicle type, pitch) - already fetched by thread
+            ind_data = fetched.get('indicator_data')
+            if ind_data:
+                v_type = ind_data.get('type', '')
+                self.current_pitch = ind_data.get('aviahorizon_pitch', 0.0)
+                if v_type:
+                    real_name = self.vehicle_map.get(v_type)
+                    if not real_name:
+                        real_name = self.vehicle_map.get(v_type.lower())
+                    if real_name:
+                        self.current_vehicle_real_name = real_name
+                    else:
+                        self.current_vehicle_real_name = v_type
+                    self.current_vehicle_raw_type = v_type
+
+            self.process_data(data)
+
+            # Merge Shared Airfields (from network)
+            stale_timeout = 300.0
+            current_time = time.time()
+            stale_ids = [sh_id for sh_id, sh_af in self.shared_airfields.items() 
+                         if current_time - sh_af.get('last_seen', 0) > stale_timeout]
+            for sh_id in stale_ids:
+                del self.shared_airfields[sh_id]
+            
+            if self.shared_airfields:
+                for sh_id, sh_af in self.shared_airfields.items():
+                    if sh_af.get('sender') == CONFIG.get('callsign', 'Pilot'):
+                        continue
+                    is_duplicate = False
+                    for existing_af in self.airfields:
+                        dist = math.sqrt((existing_af['x'] - sh_af['x'])**2 + (existing_af['y'] - sh_af['y'])**2)
+                        if dist < 0.05:
+                            is_duplicate = True
+                            break
+                    if not is_duplicate:
+                        self.airfields.append({
+                            'x': sh_af['x'],
+                            'y': sh_af['y'],
+                            'angle': sh_af.get('angle', 0),
+                            'len': sh_af.get('len', 0),
+                            'is_cv': sh_af.get('is_cv', False),
+                            'color': QColor(255, 128, 0),
+                            'id': len(self.airfields) + 1
+                        })
+            
+            # --- Web Map Data Sync ---
             if hasattr(self, 'shared_data'):
-                # self.check_web_commands() # DEPRECATED: Handled by process_web_commands timer
-                
                 self.shared_data['players'] = self.players.copy()
                 
-                # Inject Local Player for Web Map Distance Calcs
                 if hasattr(self, 'player_x') and self.player_x is not None:
                      self.shared_data['players']['_local'] = {
                          'x': self.player_x,
@@ -896,13 +962,10 @@ class OverlayWindow(QMainWindow):
                          'color': CONFIG.get('color', '#FFCC11')
                      }
                 
-                # Merge local airfields with shared (network) airfields
-                all_airfields = list(self.airfields)  # Already includes merged shared
+                all_airfields = list(self.airfields)
                 self.shared_data['airfields'] = all_airfields
                 
-                # Merge local + shared POIs
                 pois_list = []
-                # 1. User POIs (Lower Priority)
                 for poi in getattr(self, 'user_pois', []):
                     pois_list.append({
                         'x': poi['x'],
@@ -911,7 +974,6 @@ class OverlayWindow(QMainWindow):
                         'color': poi.get('color', '#FFCC11'),
                         'owner': poi.get('owner', 'Me')
                     })
-                # 2. Game POIs (Higher Priority)
                 for poi in self.pois:
                     pois_list.append({
                         'x': poi['x'],
@@ -930,11 +992,10 @@ class OverlayWindow(QMainWindow):
                     })
                 self.shared_data['pois'] = pois_list
                 
-                # DEBUG: Print final airfields list (once every few seconds or if it changes)
-                if self.show_debug: # Use existing config toggle
+                if self.show_debug:
                     print(f"[DEBUG-AF] Total: {len(self.airfields)}")
                     for i, af in enumerate(self.airfields):
-                        print(f"  [{i}] ID={af.get('id')} X={af['x']:.3f} Y={af['y']:.3f} Ang={af.get('angle',0):.1f} Src={'Local' if i < 100 else 'Shared'}") # Heuristic source check
+                        print(f"  [{i}] ID={af.get('id')} X={af['x']:.3f} Y={af['y']:.3f} Ang={af.get('angle',0):.1f}")
                         
                 self.shared_data['objectives'] = self.map_objectives
                 self.shared_data['ground_units'] = self.map_ground_units
@@ -951,42 +1012,9 @@ class OverlayWindow(QMainWindow):
                         'grid_size': getattr(self, 'grid_size', None)
                     }
 
-            else:
-                if not (self.status_text.startswith("8111: Error")):
-                    print(f"[STATUS] API Error: HTTP {response.status_code}")
-                self.status_text = f"8111: Error {response.status_code}"
-                self.status_color = Qt.GlobalColor.red
-                if '_local' in self.players: del self.players['_local']
-                
-                # Grace Period Check for Timer Reset (Error Case)
-                grace_period = 15.0
-                last_seen = getattr(self, 'last_player_seen_time', 0)
-                if (time.time() - last_seen) > grace_period:
-                    self.spawn_time = None
-                    self.flight_time = 0
-                    
-                self.airfields = []
-                self.airfields_broadcasted = False
-                if self.show_debug:
-                    print(f"[DEBUG] Airfields cleared: API returned {response.status_code}")
-        except Exception:
-            if not (self.status_text.startswith("8111: Searching") or self.status_text.startswith("Init")):
-                # print("[STATUS] Searching for War Thunder API...")
-                pass
-            self.status_text = "8111: Searching..."
-            self.status_color = Qt.GlobalColor.red
-            if '_local' in self.players: del self.players['_local']
-            
-            # Grace Period Check for Timer Reset (Exception Case)
-            grace_period = 15.0
-            last_seen = getattr(self, 'last_player_seen_time', 0)
-            if (time.time() - last_seen) > grace_period:
-                self.spawn_time = None
-                self.flight_time = 0
-            self.airfields = []
-            self.airfields_broadcasted = False
-            if self.show_debug:
-                print(f"[DEBUG] Airfields cleared: API Exception")
+        except Exception as e:
+            # Non-fatal: just skip this tick
+            pass
         
         
         # --- ALWAYS Sync Players/POIs (regardless of API status) ---
@@ -1706,11 +1734,15 @@ class OverlayWindow(QMainWindow):
         path.closeSubpath()
         
         painter.setPen(QPen(QColor(0,0,0), 1))
-        painter.setBrush(QColor(255, 255, 0))
+        # Use configured color
+        config_color = QColor(CONFIG.get('color', '#FFFF00'))
+
+        painter.setPen(QPen(QColor(0,0,0), 1))
+        painter.setBrush(config_color)
         painter.drawPath(path)
         
         # 3. Center Player Arrow (Fixed Up)
-        config_color = QColor(CONFIG.get('color', '#FFFF00'))
+        # config_color already defined above
         painter.setBrush(QBrush(config_color)) 
         scale = 1.5
         
@@ -1869,6 +1901,69 @@ class OverlayWindow(QMainWindow):
                 # Pass local player data for relative rendering (Planning paths)
                 self.draw_compass_rose(painter, rx, ry, 102.5, heading_rad, others, local_player=p)
                 
+                # --- HEADING & TARGET TEXT ---
+                heading_deg = math.degrees(heading_rad) % 360
+                
+                # Determine Target
+                target_bearing = None
+                target_dist = None
+                
+                if self.planning_waypoints:
+                    # Target is the first waypoint
+                    wp = self.planning_waypoints[0]
+                    # Calc bearing
+                    # Need map dimensions to convert normalized coords to meters for angle calc?
+                    # Actually angle is same in normalized if aspect ratio is 1:1.
+                    # BUT map might not be 1:1. 
+                    # Use pixel diff or normalized diff. Assuming 1:1 aspect for angle is okay if map is square.
+                    # War Thunder maps are usually square.
+                    
+                    dx_t = wp['x'] - p.get('x', 0)
+                    dy_t = wp['y'] - p.get('y', 0)
+                    
+                    if abs(dx_t) > 0.0001 or abs(dy_t) > 0.0001:
+                       target_bearing = math.degrees(math.atan2(dy_t, dx_t)) % 360
+                       
+                       # Calc Distance (approx in km, assuming 65km map size)
+                       # Better to use actual map size if known, but for HUD text approx is fine?
+                       # We have self.map_bounds.
+                       map_size_m = float(CONFIG.get('map_size_meters', 65000))
+                       if hasattr(self, 'map_bounds') and self.map_bounds:
+                            map_min = self.map_bounds.get('map_min', [0, 0])
+                            map_max = self.map_bounds.get('map_max', [map_size_m, map_size_m])
+                            map_size_m = max(map_max[0] - map_min[0], map_max[1] - map_min[1])
+                            
+                       dist_norm = math.hypot(dx_t, dy_t)
+                       target_dist = (dist_norm * map_size_m) / 1000.0 # km
+
+                # Draw Text
+                painter.setFont(QFont("Arial", 9, QFont.Weight.Bold))
+                metrics = QFontMetrics(painter.font())
+                
+                text_y = ry + 125 # Below Compass
+                
+                # Heading (REMOVED as per user request)
+                # hdg_str = f"HDG: {int(heading_deg):03d}"
+                # painter.setPen(QPen(Qt.GlobalColor.white))
+                # painter.drawText(rx - 40, text_y, hdg_str)
+                
+                # Target
+                if target_bearing is not None:
+                    tgt_str = f"TGT: {int(target_bearing):03d}"
+                    painter.setPen(QPen(Qt.GlobalColor.cyan)) # Cyan for Target
+                    painter.drawText(rx - 40, text_y + 15, tgt_str)
+                    
+                    # Delta (Turn indicator)
+                    diff = (target_bearing - heading_deg + 180) % 360 - 180
+                    # Arrow? or just L/R
+                    direction = "R" if diff > 0 else "L"
+                    if abs(diff) < 2: direction = ""
+                    delta_str = f"{direction} {abs(int(diff))}"
+                    
+                    dist_str = f"{target_dist:.1f}km"
+                    
+                    painter.drawText(rx + 35, text_y + 15, dist_str)
+                
                 # Draw Formation Panel below Compass (if enabled)
                 if getattr(self, 'show_formation_mode', False):
                     # Position with fixed 20px margin from right edge
@@ -1946,46 +2041,7 @@ class OverlayWindow(QMainWindow):
                 
                 y_offset += 20
 
-        # --- Draw Team Chat Messages (Bottom Left) ---
-        if self.show_marker and self.team_chat_messages:
-            screen_height = self.height()
-            chat_x = 10
-            chat_y_start = screen_height - 30  # Start from bottom
-            
-            # Show last 10 messages (cap at 10)
-            recent_messages = self.team_chat_messages[-10:]
-            
-            font_chat = QFont('Arial', 9)
-            painter.setFont(font_chat)
-            
-            # Draw from bottom to top
-            y_pos = chat_y_start
-            for msg in reversed(recent_messages):
-                # Skip local messages (only show received from network)
-                if msg.get('local', False):
-                    continue
-                
-                # Use red color for network messages (same as enemy marker) - no fade
-                sender_color = QColor(255, 50, 50)  # Red, full opacity
-                message_color = QColor(255, 255, 255)  # White, full opacity
-                
-                # Draw sender
-                painter.setPen(QPen(sender_color))
-                sender_text = f"{msg['sender']}:"
-                painter.drawText(chat_x, y_pos, sender_text)
-                
-                # Dynamic width calculation
-                metrics_chat = QFontMetrics(font_chat)
-                sender_width = metrics_chat.horizontalAdvance(sender_text)
-                
-                # Draw message
-                painter.setPen(QPen(message_color))
-                painter.drawText(chat_x + sender_width + 5, y_pos, msg['message'][:50])  # Limit to 50 chars
-                
-                y_pos -= 15  # Move up for next message
-
-
-        # Draw Marker only if 'M' is held AND Overlay is enabled via Controller
+        # (Chat rendering moved to bottom of paintEvent)
         if self.show_marker and self.map_min and self.overlay_enabled:
             
             # Iterate over all players (Draw Local FIRST so Remote appears on top)
@@ -2086,6 +2142,15 @@ class OverlayWindow(QMainWindow):
                         painter.drawPolyline(trail_points)
                 
                 raw_x, raw_y = player['x'], player['y']
+                
+                # Bounds Check: Hide players outside the map [0.0, 1.0]
+                # Also handles the 0,0 glitch for out-of-bounds players
+                if not (0.0 <= raw_x <= 1.0 and 0.0 <= raw_y <= 1.0):
+                    continue
+                
+                # Check for exact 0.0, 0.0 which often means invalid data
+                if abs(raw_x) < 0.001 and abs(raw_y) < 0.001:
+                    continue
                 
                 # SIMPLIFIED MAPPING LOGIC
                 x = MAP_OFFSET_X + (raw_x * MAP_WIDTH)
@@ -2439,12 +2504,6 @@ class OverlayWindow(QMainWindow):
             painter.setPen(QPen(Qt.GlobalColor.white))
             painter.drawText(int(bar_x + bar_width - tw), int(map_label_y), label)
 
-
-
-
-
-
-
             # --- Draw SPAA Radius Circles (4.5km) ---
             if hasattr(self, 'map_ground_units') and self.map_ground_units:
                 # Cluster SPAA units
@@ -2549,6 +2608,11 @@ class OverlayWindow(QMainWindow):
                 # Cleanup expired POIs (older than 20s or owner offline)
                 current_time = time.time()
                 expired_pids = []
+
+        # (SAM Logic Moved OUTSIDE the 'if self.show_marker' block)
+
+            # --- Shared POIs Logic Continues ---
+            for pid, poi in self.shared_pois.items():
                 for pid, poi in self.shared_pois.items():
                     # Check direct timeout
                     if current_time - poi.get('last_seen', 0) > 20:
@@ -2614,7 +2678,8 @@ class OverlayWindow(QMainWindow):
 
 
         # --- TEAM CHAT BOX (Bottom Left) ---
-        if self.team_chat_messages:
+        # Only show when Map Overlay is visible (M pressed)
+        if self.show_marker and self.team_chat_messages:
             chat_x = 10
             chat_y = self.height() - 20  # Start from bottom, move up
             line_height = 16
@@ -2690,8 +2755,112 @@ class OverlayWindow(QMainWindow):
         # if self.bomb_tracker.get_active_bombs():
         #      self.draw_graph(painter)
 
-        # if self.show_console or self.bomb_tracker.get_active_bombs():
-        #     self.draw_console(painter)
+        # --- SAM / AAA THREAT WARNING (Unconditional) ---
+        threat_type = None # None, "SAM", "AAA"
+        
+        if hasattr(self, 'map_ground_units') and '_local' in self.players:
+            local_p = self.players['_local']
+            local_x, local_y = local_p['x'], local_p['y']
+            
+            # Calculate Meters per Unit
+            map_size_m = float(CONFIG.get('map_size_meters', 65000))
+            if self.map_max and self.map_min:
+                width_m = self.map_max[0] - self.map_min[0]
+                height_m = self.map_max[1] - self.map_min[1]
+                map_size_m = max(width_m, height_m)
+            
+            # Check 1: Enemy Airfield (SAM - 12km)
+            # 12km in normalized coords
+            sam_radius_norm = 12000 / map_size_m
+            if self.airfields:
+                for af in self.airfields:
+                     # Check if enemy?
+                     # Robust Color Check (QColor object to Hex String)
+                     raw_color = af.get('color')
+                     if isinstance(raw_color, QColor):
+                         color_str = raw_color.name() # Returns #RRGGBB
+                     else:
+                         color_str = str(raw_color)
+
+                     # Expanded Friendly Check (Blue variations + original specific codes)
+                     is_friendly = (
+                         '#043' in color_str or 
+                         '#174D' in color_str or 
+                         '4,63,255' in color_str or
+                         color_str.lower().startswith('#00') or
+                         color_str.lower().startswith('#4c') or
+                         color_str.lower().startswith('#55')
+                     )
+                     
+                     # Hardcode Blue channel check if QColor?
+                     if isinstance(raw_color, QColor):
+                         if raw_color.blue() > 150 and raw_color.red() < 100:
+                             is_friendly = True
+                     
+                     if not is_friendly:
+                         dist = math.hypot(af['x'] - local_x, af['y'] - local_y)
+                         if dist < sam_radius_norm:
+                             threat_type = "SAM"
+                             break
+            
+            
+            # Check 2: Enemy SPAA (AAA - 4.5km) - Overrides SAM if present (Imminent Threat)
+            # 4.5km in normalized coords
+            aaa_radius_norm = 4500 / map_size_m
+            
+            if self.map_ground_units:
+                for unit in self.map_ground_units:
+                    icon = (unit.get('icon') or '').lower()
+                    if 'aa' in icon or 'spaa' in icon or 'sam' in icon:
+                             # Check Color (Enemy Only)
+                             color_str = str(unit.get('color', '#FF0000'))
+                             is_friendly = '#043' in color_str or '#174D' in color_str or '4,63,255' in color_str
+                             
+                             u_x, u_y = unit.get('x', 0), unit.get('y', 0)
+                             dist = math.hypot(u_x - local_x, u_y - local_y)
+                             
+                             if not is_friendly:
+                                 if dist < aaa_radius_norm:
+                                     threat_type = "AAA"
+                                     break
+        
+        if threat_type:
+            # Play VWS warning
+            if hasattr(self, 'vws'):
+                self.vws.play_warning(threat_type)
+
+            # Flash effect (Sync with VWS Interval)
+            # Default to 1Hz if VWS not present
+            interval = 1.0
+            if hasattr(self, 'vws'):
+                interval = self.vws.interval
+            
+            # 50% Duty Cycle
+            if (time.time() % interval) < (interval / 2):
+                font_size = 28
+                painter.setFont(QFont("Arial", font_size, QFont.Weight.Bold))
+                
+                warn_text = threat_type # "SAM" or "AAA"
+                fm = QFontMetrics(painter.font())
+                tw = fm.horizontalAdvance(warn_text)
+                th = fm.height()
+                
+                # Bottom Left Position
+                # 100px from Left, 200px from Bottom
+                x = 100
+                y = self.height() - 200
+                
+                # Draw Background Box
+                padding = 10
+                box_rect = QRectF(x - padding, y - th + (padding/2), tw + (padding*2), th + padding)
+                
+                painter.setBrush(QBrush(QColor(0, 0, 0, 180))) # Semi-transparent Black
+                painter.setPen(QPen(QColor(255, 0, 0), 2)) # Red Border
+                painter.drawRoundedRect(box_rect, 5, 5)
+                
+                # Draw Text
+                painter.setPen(QPen(QColor(255, 0, 0))) # Red Text
+                painter.drawText(x, y, warn_text)
 
     def draw_formation_panel(self, painter, cx, top_y, others):
         """Draws a list of nearby players under the compass"""
@@ -2830,10 +2999,38 @@ class OverlayWindow(QMainWindow):
 
 
 
+
+
     def toggle_console(self):
         self.show_console = not self.show_console
         print(f"[UI] Console Output: {self.show_console}")
         self.update()
+
+    def update_physics(self):
+        """Update physics simulations (Off-load from paintEvent)"""
+        # Calculate Pre-Drop TTI
+        dist_m = self.get_target_distance()
+        if dist_m:
+            try:
+                sim = self.bomb_tracker.simulator
+                sos = sim.get_sound_speed(self.current_altitude)
+                mach = (self.current_speed / 3.6) / sos
+                
+                # Heavy Calculation
+                tti, _, _ = sim.run(self.current_altitude, mach, dist_m)
+                mode = sim.detect_flight_mode(self.current_altitude, mach, dist_m)
+                
+                # Format Result
+                error_margin = tti * 0.05
+                self.cached_predrop_text = f"[{mode}]: {tti:.0f}s (± {error_margin:.1f}s)"
+                self.cached_predrop_color = QColor(0, 255, 255) # Cyan
+                self.cached_predrop_mode = mode
+            except Exception as e:
+                # print(f"[PHYS] Error: {e}")
+                self.cached_predrop_text = "ERR"
+                self.cached_predrop_color = QColor(255, 0, 0)
+        else:
+            self.cached_predrop_text = None
 
     def get_target_distance(self):
         """Logic to determine current target distance in meters"""
@@ -2903,7 +3100,7 @@ class OverlayWindow(QMainWindow):
         if cols < 1: cols = 1
         
         # Dimensions
-        col_width = 260 if cols == 1 else 240 # Wider for single column
+        col_width = 270 if cols == 1 else 250 # Wider for single column
         w = (col_width * cols) + 10
         
         # Calculate height
@@ -2923,25 +3120,13 @@ class OverlayWindow(QMainWindow):
         # List
         painter.setFont(QFont("Consolas", 11, QFont.Weight.Bold))
         
-        # 0. Draw PRE-DROP Line
-        dist_m = self.get_target_distance()
-        if dist_m:
-            sim = self.bomb_tracker.simulator
-            sos = sim.get_sound_speed(self.current_altitude)
-            mach = (self.current_speed / 3.6) / sos
-            mode, _, _ = sim.detect_flight_mode(self.current_altitude, mach, dist_m)
-            tti, _ = sim.run(self.current_altitude, mach, dist_m)
-            
-            # Short form mode
-            mode_short = shorthands.get(mode, mode[:1])
-            error_margin = tti * 0.05
-            pre_text = f"[{mode}]: {tti:.0f}s (± {error_margin:.1f}s)"
-            
-            painter.setPen(QColor(0, 255, 255)) # Cyan for Pre-drop
-            painter.drawText(x + 10, y + 20, pre_text)
+        # 0. Draw PRE-DROP Line (Cached)
+        if self.cached_predrop_text:
+            painter.setPen(self.cached_predrop_color)
+            painter.drawText(x + 10, y + 20, self.cached_predrop_text)
         else:
             painter.setPen(QColor(150, 150, 150))
-            painter.drawText(x + 10, y + 20, "PRE: NO TARGET")
+            painter.drawText(x + 10, y + 20, "NO TARGET")
 
         # 1. Draw Active Bombs
         for i, b in enumerate(active_bombs):
@@ -3229,10 +3414,8 @@ class OverlayWindow(QMainWindow):
             cur_y += line_h
 
 def print_welcome():
-    """Display welcome screen with ASCII art logo"""
     welcome = """\r
 LINK 18\r
-Version 1.3.0\r
 \r
 [INFO] Starting overlay application...\r
 [INFO] Callsign: {callsign}\r
@@ -3254,26 +3437,22 @@ class ControllerWindow(QWidget):
         self.setup_ui()
         
     def setup_ui(self):
-        self.setWindowTitle("Link18 Tactical Controller v1.3.0")
+        self.setWindowTitle("Link18 Tactical Controller")
         self.setGeometry(100, 100, 350, 200)
         
         layout = QVBoxLayout()
         
-        title = QLabel("Link18 Tactical Overlay: ACTIVE")
+        title = QLabel("Link18 Tactical Overlay")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         font = QFont("Arial", 12, QFont.Weight.Bold)
         title.setFont(font)
         layout.addWidget(title)
         
         # Add map URL info
-        map_url = QLabel("Tactical Web Map URL:\nhttp://localhost:8000")
+        map_url = QLabel("Tactical Web Map:\nhttp://localhost:8000")
         map_url.setAlignment(Qt.AlignmentFlag.AlignCenter)
         map_url.setStyleSheet("color: #043FFF; font-weight: bold;")
         layout.addWidget(map_url)
-        
-        info = QLabel("Show Overlay: Hold 'M' key")
-        info.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(info)
 
         # Added Map Overlay Toggle
         from PyQt6.QtWidgets import QCheckBox
@@ -3354,7 +3533,7 @@ def main():
         monitor = KeyMonitor(activation_key)
         monitor.show_signal.connect(overlay.set_marker_visible)
         monitor.hide_signal.connect(overlay.set_marker_hidden)
-        monitor.debug_signal.connect(overlay.toggle_debug)
+        # monitor.debug_signal.connect(overlay.toggle_debug) # Removed
         monitor.broadcast_airfields_signal.connect(overlay.broadcast_airfields)  # Connect B key to broadcast
         monitor.calibrate_signal.connect(overlay.trigger_calibration)  # Connect M+N to calibration
         monitor.bomb_release_signal.connect(overlay.on_bomb_release) # Connect Spacebar

@@ -6,9 +6,14 @@
 Link18/
 ├── main.py              # Core overlay + network logic 
 ├── jdamertti.py         # Standalone JDAM physics simulator
+├── vws.py               # Voice Warning System (audio alerts)
 ├── web_server.py        # Flask server for web map API
 ├── auto_calibrate_new.py# Map calibration logic (CV-based)
 ├── create_release.py    # Release automation script
+├── sounds/              # VWS audio files
+│   ├── vws_sam.wav      # SAM warning audio
+│   ├── vws_aaa.wav      # AAA warning audio
+│   └── welcome/         # Random startup greetings
 ├── web/
 │   └── dashboard.html   # Web map UI (Canvas-based)
 ├── config.json          # User configuration
@@ -56,19 +61,30 @@ The GBU-62/JDAM-ER simulation is now a self-contained module:
 
 | Class | Purpose |
 |-------|---------|
-| `OverlayWindow` | Main transparent overlay, handles painting, telemetry polling, network |
+| `OverlayWindow` | Main transparent overlay, handles painting, telemetry processing, network |
+| `TelemetryFetcher` | Background thread for HTTP polling (prevents audio stutter) |
 | `NetworkReceiver` | UDP listener thread for incoming packets |
 | `KeyMonitor` | Keyboard listener. Handles 'M' (Show) and 'M+N' (Calibrate) |
 | `ControllerWindow` | Small control panel window |
 
+### Voice Warning System (`vws.py`)
+
+The VWS module provides audio alerts for threats:
+- **SoundManager**: Manages loading/playing `.wav` files and synthesized tones.
+- **Synthesized Fallback**: When `enable_vws` is `false`, generates sine-wave tones.
+- **Normalization**: Optional loudness normalization to -0.2dB headroom.
+- **Startup Tone**: Procedurally generated ascending fourths chime.
+
 ### Data Flow
 
-1. **Telemetry**: `update_telemetry()` polls WT API every 100ms.
-2. **Map Sync**: `refresh_map_bounds()` pulls map info from `map_info.json`.
-3. **Processing**: `process_data()` parses player position, updates timers.
-4. **Network TX**: `broadcast_packet()` sends position/airfields via UDP.
-5. **Network RX**: `update_network_data()` handles incoming packets.
-6. **Rendering**: `paintEvent()` draws overlay, `web_server.py` serves API to browser.
+1. **Telemetry Fetch**: `TelemetryFetcher` (background thread) polls WT API every 100ms.
+2. **Data Processing**: `on_telemetry_data()` processes fetched data on main thread (non-blocking).
+3. **Map Sync**: Map bounds updated from `map_info.json` (fetched by background thread).
+4. **Physics**: `update_physics()` runs JDAM simulations at 10Hz on a separate timer.
+5. **Network TX**: `broadcast_packet()` sends position/airfields via UDP.
+6. **Network RX**: `update_network_data()` handles incoming packets.
+7. **Rendering**: `paintEvent()` draws overlay using cached data. `web_server.py` serves API to browser.
+8. **Audio**: `SoundManager` plays warnings via `QSoundEffect` (low-latency, event-loop driven).
 
 ### Web Map Server (`web_server.py`)
 
@@ -145,7 +161,7 @@ python create_release.py
 **`create_release.py` performs the following:**
 1. Sanitizes `config.json` (removes personal callsign/colors).
 2. Runs `PyInstaller` (if needed, otherwise looks for `dist/Link18.exe`).
-3. Zips `Link18.exe`, `web/`, `README.md`, and the sanitized config into `Link18_v1.4.0.zip`.
+3. Zips `Link18.exe`, `web/`, `sounds/`, `README.md`, and the sanitized config into `Link18_v1.6.0.zip`.
 
 ### Release Process Standards
 

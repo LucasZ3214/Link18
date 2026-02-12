@@ -1,4 +1,4 @@
-# Link18 v1.5.0 - Tactical Overlay for War Thunder
+# Link18 v1.6.0 - Tactical Overlay for War Thunder
 
 **Link18** is a transparent tactical overlay and web-based map for War Thunder that enables real-time squad coordination via shared markers, flight timers, and NATO-standard unit symbology.
 
@@ -13,11 +13,17 @@
 
 ---
 
-## What's New in v1.5.0
+## What's New in v1.6.0
 
 | Feature | Description |
 |---------|-------------|
-| **GBU HUD** | GBU-62 JDAM-ER TOT/TTI Timer[BETA] |
+| **Voice Warning System (VWS)** | Audio alerts for SAM and AAA threats with customizable volume and interval |
+| **VWS Toggle** | Enable/disable VWS in `config.json`; falls back to synthesized warning tones |
+| **Startup Chime** | Ascending fourths chime (C5-F5-Bb5-Eb6) plays on boot with fade-out |
+| **Welcome Audio** | Random `.wav` from `sounds/welcome/` plays on startup |
+| **Loudness Normalization** | Optional normalization brings all VWS audio to consistent levels |
+| **Performance: Threaded Telemetry** | All HTTP polling moved to background thread — zero main-thread blocking |
+| **Performance: Physics Cache** | JDAM TTI calculations decoupled from render loop (10Hz physics timer) |
 
 ---
 
@@ -31,11 +37,26 @@
 | **Flight Timers** | T+ mission timer, T- coordinator countdown |
 | **Auto-Calibration** | Press **M+N** to automatically align overlay with map (Computer Vision) |
 | **Real Names** | Vehicle IDs converted to real names (e.g. "f_16c" -> "F-16C Block 50") |
-| **Compass Rose** | toggleable on-screen compass with heading and bearing indicators |
+| **Compass Rose** | Toggleable on-screen compass with heading and bearing indicators |
 | **Dynamic ETA** | Time-enroute calculation to waypoints based on current or manual speed |
 | **Waypoint Mode** | Draw flight paths on the Web Map that sync to the in-game overlay |
 | **Convoy Info** | Hover details for ground columns (composition, count) |
 | **Smart Declutter** | Overlapping icons auto-hide, SAMs prioritized |
+| **VWS Audio** | Configurable voice/tone warnings for SAM and AAA threats |
+| **GBU HUD** | GBU-62 JDAM-ER TOT/TTI Timer [BETA] |
+
+---
+
+## Voice Warning System (VWS)
+
+Link18 includes an audio alert system for threats:
+
+- **SAM/AAA Warnings**: Plays `.wav` files from `sounds/` when threats are detected.
+- **Synthesized Fallback**: When VWS is disabled (`enable_vws: false`), plays distinct sine tones:
+  - SAM: Low pulse (600Hz)
+  - AAA: High pulse (1200Hz)
+- **Startup Chime**: Ascending fourths arpeggio plays on boot.
+- **Welcome Audio**: Place `.wav` files in `sounds/welcome/` for a random greeting on startup.
 
 ---
 
@@ -87,6 +108,10 @@ Click the **Settings** button (bottom right) to:
     "enable_web_map": true,
     "disable_lan_broadcast": false,
     "web_marker_scale": 2.3,
+    "enable_vws": true,
+    "vws_volume": 0.5,
+    "vws_interval": 5,
+    "vws_normalize": false,
     "debug_mode": false
 }
 ```
@@ -97,14 +122,18 @@ Click the **Settings** button (bottom right) to:
 | `color` | hex | Your marker color |
 | `udp_port` | int | Network port (default: 50050) |
 | `broadcast_ip` | string | LAN/VPN broadcast address (must end in `.255`) |
-| `map_offset_x/y` | int | **(New)** Manual overlay alignment offset (pixels) |
-| `map_width/height` | int | **(New)** Manual overlay size (pixels) |
+| `map_offset_x/y` | int | Manual overlay alignment offset (pixels) |
+| `map_width/height` | int | Manual overlay size (pixels) |
 | `activation_key` | string | Key to hold for overlay |
 | `timer_interval` | int | T- countdown interval (minutes) |
 | `unit_is_kts` | bool | `true`=Knots, `false`=km/h |
 | `trail_duration` | int | Flight path history (seconds) |
-| `disable_lan_broadcast` | bool | **(New)** If `true`, only receives data (silent mode) |
+| `disable_lan_broadcast` | bool | If `true`, only receives data (silent mode) |
 | `web_marker_scale` | float | Icon size on web map |
+| `enable_vws` | bool | Enable voice warning audio (`false` = synth fallback tones) |
+| `vws_volume` | float | Warning volume (0.0 - 1.0) |
+| `vws_interval` | float | Minimum seconds between repeated warnings |
+| `vws_normalize` | bool | Normalize audio loudness on load |
 
 ---
 
@@ -126,6 +155,8 @@ Click the **Settings** button (bottom right) to:
 | Players not visible | Check firewall, verify `broadcast_ip` |
 | Phantom airfield | Restart app (stale data expires in 60s) |
 | Grid labels wrong | Refresh browser |
+| Audio stutter | Ensure no other apps are using audio device heavily |
+| VWS not playing | Check `sounds/` directory has valid `.wav` files |
 
 ---
 
@@ -135,7 +166,19 @@ Detailed technical documentation, including project structure, architecture, and
 
 ---
 
-## What's New in v1.4.0
+## Previous Releases
+
+<details>
+<summary>v1.5.0</summary>
+
+| Feature | Description |
+|---------|-------------|
+| **GBU HUD** | GBU-62 JDAM-ER TOT/TTI Timer [BETA] |
+
+</details>
+
+<details>
+<summary>v1.4.0</summary>
 
 | Feature | Description |
 |---------|-------------|
@@ -143,6 +186,8 @@ Detailed technical documentation, including project structure, architecture, and
 | **Waypoint Z-Order** | Planning paths now render above all map icons |
 | **Ruler Positioning** | Adjusted bottom spacing for better visibility |
 | **UI Cleanup** | Removed debug POI counter from toolbar |
+
+</details>
 
 ---
 

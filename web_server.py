@@ -214,7 +214,9 @@ def run_server(shared_data_ref, port=8000):
     socketserver.TCPServer.allow_reuse_address = True
     
     try:
-        httpd = socketserver.TCPServer(("", port), Handler)
+        # Use ThreadingTCPServer to handle concurrent requests (e.g. Map Proxy + API)
+        # preventing the server from locking up if one request behaves slowly.
+        httpd = socketserver.ThreadingTCPServer(("", port), Handler)
         
         # Get all local IPs
         hostname = socket.gethostname()
@@ -224,6 +226,7 @@ def run_server(shared_data_ref, port=8000):
             local_ips = [socket.gethostbyname(hostname)]
             
         print(f"[WEB] Dashboard Server running on Port {port}")
+        print(f"      - http://127.0.0.1:{port} (Local)")
         for ip in local_ips:
             print(f"      - http://{ip}:{port}")
             

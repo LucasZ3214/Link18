@@ -58,3 +58,17 @@ trajectory_graphs/
 
 # Logs and temp
 *.log
+
+# Temporary / Backup files
+jdamertti_v1.5.0.py
+git_log.txt
+old_main.py
+best_physics_params.json
+
+# Test scripts
+test_vws.py
+validate_sim.py
+tune_physics.py
+
+# VWS temp / user sounds
+sounds/welcome/
