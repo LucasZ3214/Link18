@@ -17,13 +17,11 @@
 
 | Feature | Description |
 |---------|-------------|
+| **System Tray Controller** | App minimizes to tray with custom icon; context menu for controls |
+| **Web Server Stability** | Fixes for Safari keep-alive hangs and map proxy timeouts |
+| **Controller UI** | Reordered layout, Settings button on top, Status indicators for players |
 | **Voice Warning System (VWS)** | Audio alerts for SAM and AAA threats with customizable volume and interval |
-| **VWS Toggle** | Enable/disable VWS in `config.json`; falls back to synthesized warning tones |
-| **Startup Chime** | Ascending fourths chime (C5-F5-Bb5-Eb6) plays on boot with fade-out |
-| **Welcome Audio** | Random `.wav` from `sounds/welcome/` plays on startup |
-| **Loudness Normalization** | Optional normalization brings all VWS audio to consistent levels |
 | **Performance: Threaded Telemetry** | All HTTP polling moved to background thread — zero main-thread blocking |
-| **Performance: Physics Cache** | JDAM TTI calculations decoupled from render loop (10Hz physics timer) |
 
 ---
 

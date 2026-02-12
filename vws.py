@@ -66,12 +66,12 @@ class SoundManager(QObject):
                 print(f"[VWS] Warning: File not found {filename}")
 
     def generate_startup_tone(self):
-        """Generate an Ascending Fourths Chime (C5, F5, Bb5, Eb6)"""
+        """Generate a two-note startup chime (C5, F5)"""
         note_duration = 0.2
         sample_rate = 44100
         
-        # Frequencies: Ascending Perfect Fourths (Tech/Sci-Fi feel)
-        frequencies = [523.25, 698.46, 932.33, 1244.51]
+        # Two-note ascending fourth
+        frequencies = [523.25, 698.46]
         
         audio_segments = []
         

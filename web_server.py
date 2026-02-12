@@ -41,6 +41,7 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
             self.send_header('Access-Control-Allow-Origin', '*')
+            self.send_header('Connection', 'close')
             self.end_headers()
             
             # Serialize data safely
@@ -112,13 +113,14 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             # Request higher resolution map (4096px)
             try:
                 import urllib.request
-                response = urllib.request.urlopen("http://localhost:8111/map.img?gen=1&size=4096", timeout=5)
+                response = urllib.request.urlopen("http://localhost:8111/map.img?gen=1&size=4096", timeout=2)
                 content = response.read()
                 
                 if len(content) > 0:
                     self.send_response(200)
                     self.send_header('Content-type', 'image/jpeg')
                     self.send_header('Content-Length', str(len(content)))
+                    self.send_header('Connection', 'close')
                     self.end_headers()
                     self.wfile.write(content)
                 else:
@@ -155,14 +157,14 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                 
                 self.send_response(200)
                 self.send_header('Content-type', 'application/json')
+                self.send_header('Connection', 'close')
                 self.end_headers()
                 self.wfile.write(b'{"status": "ok"}')
             except Exception as e:
                 print(f"[WEB] Command Error: {e}")
                 self.send_error(400)
             return
-            
-        return super().do_GET() # Fallback
+            return
 
     def log_message(self, format, *args):
         # Silence access logs (e.g. "GET /api/data 200")
@@ -217,6 +219,7 @@ def run_server(shared_data_ref, port=8000):
         # Use ThreadingTCPServer to handle concurrent requests (e.g. Map Proxy + API)
         # preventing the server from locking up if one request behaves slowly.
         httpd = socketserver.ThreadingTCPServer(("", port), Handler)
+        httpd.timeout = 10  # Prevent hung connections
         
         # Get all local IPs
         hostname = socket.gethostname()

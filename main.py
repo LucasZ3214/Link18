@@ -8,14 +8,17 @@ import time
 from datetime import datetime
 import numpy as np
 from PIL import Image, ImageDraw
-from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QLabel, QPushButton
+from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QDialog, QScrollArea, QFormLayout, QSpinBox, QDoubleSpinBox, QLineEdit, QCheckBox, QGroupBox, QSystemTrayIcon, QMenu
 from PyQt6.QtCore import Qt, QTimer, QPointF, QRectF, pyqtSignal, QObject, QThread, QLineF
-from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QFont, QPolygonF, QFontMetrics, QPainterPath
+from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QFont, QPolygonF, QFontMetrics, QPainterPath, QIcon, QAction
 from pynput import keyboard
 from auto_calibrate_new import auto_calibrate_map_v2  # Import new calibration logic
 import web_server # Import Web Server Module
 from jdamertti import BombTracker # Import BombTracker
 from vws import SoundManager # Import VWS
+
+# Version Tag
+VERSION_TAG = "v1.6.0"
 
 # Configuration
 # Load Configuration
@@ -62,6 +65,7 @@ class KeyMonitor(QObject):
         self.listener = keyboard.Listener(on_press=self.on_press, on_release=self.on_release)
         self.listener.start()
         self.is_pressed = False
+        self.gbu_enabled = True
 
     def on_press(self, key):
         try:
@@ -77,7 +81,8 @@ class KeyMonitor(QObject):
                 elif key.char.lower() == 'j':
                     self.toggle_console_signal.emit()
             elif key == keyboard.Key.space:
-                self.bomb_release_signal.emit()
+                if self.gbu_enabled:
+                    self.bomb_release_signal.emit()
         except AttributeError:
             pass
 
@@ -3008,6 +3013,9 @@ class OverlayWindow(QMainWindow):
 
     def update_physics(self):
         """Update physics simulations (Off-load from paintEvent)"""
+        if not getattr(self, 'show_gbu_timers', True):
+            self.cached_predrop_text = None
+            return
         # Calculate Pre-Drop TTI
         dist_m = self.get_target_distance()
         if dist_m:
@@ -3061,6 +3069,8 @@ class OverlayWindow(QMainWindow):
         return None
 
     def on_bomb_release(self):
+        if not getattr(self, 'show_gbu_timers', True):
+            return
         # Determine Target Distance
         target_dist_m = self.get_target_distance()
         if target_dist_m is None:
@@ -3414,53 +3424,272 @@ class OverlayWindow(QMainWindow):
             cur_y += line_h
 
 def print_welcome():
-    welcome = """\r
-LINK 18\r
-\r
-[INFO] Starting overlay application...\r
-[INFO] Callsign: {callsign}\r
-[INFO] Calibrate map: Hold M + Press N\r
-[INFO] Show overlay: Press {key}\r
-[INFO] Network: {ip}:{port}\r
-"""
-    print(welcome.format(
-        callsign=CONFIG.get('callsign', 'Unknown'),
-        key=CONFIG.get('activation_key', 'm').upper(),
-        ip=CONFIG.get('broadcast_ip', 'N/A'),
-        port=CONFIG.get('udp_port', 50050)
-    ))
+    print(f"\nLINK 18 {VERSION_TAG}\n")
+    print("[INFO] Starting overlay application...")
+    print(f"[INFO] Callsign: {CONFIG.get('callsign', 'Unknown')}")
+    print("[INFO] Calibrate map: Hold M + Press N")
+    print(f"[INFO] Show overlay: Press {CONFIG.get('activation_key', 'm').upper()}")
+    print(f"[INFO] Network: {CONFIG.get('broadcast_ip', 'N/A')}:{CONFIG.get('udp_port', 50050)}\n")
+
+
+class SettingsDialog(QDialog):
+    """Settings popup to edit all config.json values via GUI"""
+    def __init__(self, overlay_window, parent=None):
+        super().__init__(parent)
+        self.overlay = overlay_window
+        self.setWindowTitle("Link18 Settings")
+        self.setMinimumWidth(420)
+        self.setStyleSheet("""
+            QGroupBox { font-weight: bold; margin-top: 10px; padding-top: 16px; }
+            QPushButton { padding: 6px 12px; }
+        """)
+        self.fields = {}
+        self.build_ui()
+
+    def build_ui(self):
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea { border: none; }")
+        
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setSpacing(4)
+
+        # --- Identity ---
+        grp = QGroupBox("Identity")
+        g = QFormLayout()
+        self.add_text(g, "callsign", "Callsign")
+        self.add_text(g, "color", "Color (hex)", placeholder="#FFCC11")
+        grp.setLayout(g)
+        layout.addWidget(grp)
+
+        # --- Network ---
+        grp = QGroupBox("Network")
+        g = QFormLayout()
+        self.add_text(g, "broadcast_ip", "Broadcast IP")
+        self.add_int(g, "udp_port", "UDP Port", 1024, 65535)
+        self.add_bool(g, "disable_lan_broadcast", "Disable LAN Broadcast")
+        grp.setLayout(g)
+        layout.addWidget(grp)
+
+        # --- Map Overlay ---
+        grp = QGroupBox("Map Overlay")
+        g = QFormLayout()
+        self.add_bool(g, "enable_map_overlay", "Enable Map Overlay")
+        self.add_text(g, "activation_key", "Activation Key")
+        self.add_int(g, "map_offset_x", "Map Offset X", 0, 9999)
+        self.add_int(g, "map_offset_y", "Map Offset Y", 0, 9999)
+        self.add_int(g, "map_width", "Map Width", 100, 9999)
+        self.add_int(g, "map_height", "Map Height", 100, 9999)
+        self.add_int(g, "trail_duration", "Trail Duration (s)", 0, 3600)
+        grp.setLayout(g)
+        layout.addWidget(grp)
+
+        # --- Web Map ---
+        grp = QGroupBox("Web Map")
+        g = QFormLayout()
+        self.add_bool(g, "enable_web_map", "Enable Web Map")
+        self.add_float(g, "web_marker_scale", "Marker Scale", 0.1, 10.0, 1)
+        grp.setLayout(g)
+        layout.addWidget(grp)
+
+        # --- Audio / VWS ---
+        grp = QGroupBox("Audio / VWS")
+        g = QFormLayout()
+        self.add_bool(g, "enable_vws", "Enable VWS")
+        self.add_float(g, "vws_volume", "Volume", 0.0, 1.0, 2)
+        self.add_float(g, "vws_interval", "Warning Interval (s)", 0.1, 60.0, 1)
+        self.add_bool(g, "vws_normalize", "Normalize Audio")
+        grp.setLayout(g)
+        layout.addWidget(grp)
+
+        # --- Advanced ---
+        grp = QGroupBox("Advanced")
+        g = QFormLayout()
+        self.add_int(g, "timer_interval", "Timer Interval (min)", 1, 120)
+        self.add_bool(g, "unit_is_kts", "Speed in Knots")
+        self.add_bool(g, "debug_mode", "Debug Mode")
+        grp.setLayout(g)
+        layout.addWidget(grp)
+
+        scroll.setWidget(container)
+
+        # Buttons
+        btn_layout = QHBoxLayout()
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setObjectName("cancelBtn")
+        cancel_btn.clicked.connect(self.reject)
+        save_btn = QPushButton("Save && Apply")
+        save_btn.clicked.connect(self.save_settings)
+        btn_layout.addWidget(cancel_btn)
+        btn_layout.addWidget(save_btn)
+
+        main_layout = QVBoxLayout(self)
+        main_layout.addWidget(scroll)
+        main_layout.addLayout(btn_layout)
+
+    # --- Field Helpers ---
+    def add_text(self, layout, key, label, placeholder=""):
+        w = QLineEdit(str(CONFIG.get(key, "")))
+        if placeholder:
+            w.setPlaceholderText(placeholder)
+        self.fields[key] = ('text', w)
+        layout.addRow(label + ":", w)
+
+    def add_int(self, layout, key, label, min_v=0, max_v=99999):
+        w = QSpinBox()
+        w.setRange(min_v, max_v)
+        w.setValue(int(CONFIG.get(key, 0)))
+        self.fields[key] = ('int', w)
+        layout.addRow(label + ":", w)
+
+    def add_float(self, layout, key, label, min_v=0.0, max_v=100.0, decimals=2):
+        w = QDoubleSpinBox()
+        w.setRange(min_v, max_v)
+        w.setDecimals(decimals)
+        w.setSingleStep(0.1)
+        w.setValue(float(CONFIG.get(key, 0.0)))
+        self.fields[key] = ('float', w)
+        layout.addRow(label + ":", w)
+
+    def add_bool(self, layout, key, label):
+        w = QCheckBox()
+        w.setChecked(bool(CONFIG.get(key, False)))
+        self.fields[key] = ('bool', w)
+        layout.addRow(label + ":", w)
+
+    def save_settings(self):
+        """Collect values, update CONFIG, write to disk, apply live"""
+        for key, (ftype, widget) in self.fields.items():
+            if ftype == 'text':
+                CONFIG[key] = widget.text()
+            elif ftype == 'int':
+                CONFIG[key] = widget.value()
+            elif ftype == 'float':
+                CONFIG[key] = round(widget.value(), 4)
+            elif ftype == 'bool':
+                CONFIG[key] = widget.isChecked()
+
+        # Save to disk
+        try:
+            with open('config.json', 'w') as f:
+                json.dump(CONFIG, f, indent=4)
+            print("[SETTINGS] Config saved to config.json")
+        except Exception as e:
+            print(f"[SETTINGS] Error saving config: {e}")
+
+        # Apply live changes where possible
+        if hasattr(self.overlay, 'sound_manager'):
+            sm = self.overlay.sound_manager
+            sm.set_volume(CONFIG.get('vws_volume', 0.5))
+            sm.set_interval(CONFIG.get('vws_interval', 5))
+            sm.enabled = CONFIG.get('enable_vws', True)
+
+        self.overlay.show_debug = CONFIG.get('debug_mode', False)
+
+        self.accept()
+        print("[SETTINGS] Settings applied.")
+
 
 class ControllerWindow(QWidget):
     def __init__(self, overlay_window):
         super().__init__()
         self.overlay = overlay_window
+        self.setup_tray()
         self.setup_ui()
+        # Start minimized to tray
+        self.hide()
         
+    def setup_tray(self):
+        """Create system tray icon with context menu"""
+        self.tray = QSystemTrayIcon(self)
+        
+        # Build icon using the center arrow from compass rose
+        from PyQt6.QtGui import QPixmap
+        pix = QPixmap(64, 64)
+        pix.fill(QColor(0, 0, 0, 0))  # Transparent
+        p = QPainter(pix)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.translate(32, 32)
+        s = 3.5  # Scale to fill 64px
+        # Circle behind arrow (tip sticks out above)
+        p.setPen(QPen(QColor(255, 255, 255), 3))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawEllipse(QPointF(0, 0), 30, 30)
+        # Same chevron shape as compass rose center arrow
+        path = QPainterPath()
+        path.moveTo(0, -10 * s)         # Tip (top)
+        path.lineTo(-6 * s, 8 * s)      # Bottom-left
+        path.lineTo(0, 4 * s)           # Notch (center)
+        path.lineTo(6 * s, 8 * s)       # Bottom-right
+        path.closeSubpath()
+        p.setPen(QPen(QColor(0, 0, 0), 2))
+        p.setBrush(QBrush(QColor('#FFCC11')))
+        p.drawPath(path)
+        p.end()
+        self.tray.setIcon(QIcon(pix))
+        self.tray.setToolTip("Link18 Tactical Overlay")
+        
+        # Context menu
+        menu = QMenu()
+        show_action = QAction("Show Controller", self)
+        show_action.triggered.connect(self.toggle_window)
+        menu.addAction(show_action)
+        
+        settings_action = QAction("Settings", self)
+        settings_action.triggered.connect(self.open_settings)
+        menu.addAction(settings_action)
+        
+        menu.addSeparator()
+        quit_action = QAction("Quit Link18", self)
+        quit_action.triggered.connect(self.quit_app)
+        menu.addAction(quit_action)
+        
+        self.tray.setContextMenu(menu)
+        self.tray.activated.connect(self.on_tray_click)
+        self.tray.show()
+    
+    def on_tray_click(self, reason):
+        if reason == QSystemTrayIcon.ActivationReason.Trigger:  # Single click
+            self.toggle_window()
+    
+    def toggle_window(self):
+        if self.isVisible():
+            self.hide()
+        else:
+            self.show()
+            self.raise_()
+            self.activateWindow()
+
     def setup_ui(self):
-        self.setWindowTitle("Link18 Tactical Controller")
-        self.setGeometry(100, 100, 350, 200)
+        self.setWindowTitle("Link18 Controller")
+        self.setGeometry(100, 100, 350, 380)
         
         layout = QVBoxLayout()
         
-        title = QLabel("Link18 Tactical Overlay")
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        font = QFont("Arial", 12, QFont.Weight.Bold)
-        title.setFont(font)
-        layout.addWidget(title)
+        # Settings Button (top)
+        settings_btn = QPushButton("\u2699  Settings")
+        settings_btn.setStyleSheet("background-color: #2d2d44; color: white; padding: 8px; font-weight: bold; border-radius: 4px; border: 1px solid #555;")
+        settings_btn.clicked.connect(self.open_settings)
+        layout.addWidget(settings_btn)
+        
+        shutdown_btn = QPushButton("TERMINATE LINK18")
+        shutdown_btn.setStyleSheet("background-color: #ff4444; color: white; padding: 10px; font-weight: bold; border-radius: 4px;")
+        shutdown_btn.clicked.connect(self.close)
+        layout.addWidget(shutdown_btn)
         
         # Add map URL info
-        map_url = QLabel("Tactical Web Map:\nhttp://localhost:8000")
+        map_url = QLabel("Web Map:http://localhost:8000")
         map_url.setAlignment(Qt.AlignmentFlag.AlignCenter)
         map_url.setStyleSheet("color: #043FFF; font-weight: bold;")
         layout.addWidget(map_url)
 
-        # Added Map Overlay Toggle
-        from PyQt6.QtWidgets import QCheckBox
-        self.overlay_toggle = QCheckBox("Enable Map Overlay (Screen)")
+        # Map Overlay Toggle
+        self.overlay_toggle = QCheckBox("Enable Map Overlay")
         self.overlay_toggle.setChecked(CONFIG.get('default_map_visible', True))
         self.overlay_toggle.setStyleSheet("font-weight: bold; margin: 10px; color: black;")
         self.overlay_toggle.stateChanged.connect(self.toggle_overlay)
-        layout.addWidget(self.overlay_toggle, 0, Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.overlay_toggle)
         
         # Formation Mode Toggle
         self.formation_toggle = QCheckBox("Enable Formation Mode")
@@ -3469,21 +3698,31 @@ class ControllerWindow(QWidget):
         self.formation_toggle.setChecked(False) 
         self.formation_toggle.setStyleSheet("font-weight: bold; margin: 10px; color: black;")
         self.formation_toggle.stateChanged.connect(self.toggle_formation)
-        layout.addWidget(self.formation_toggle, 0, Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.formation_toggle)
         
         # GBU Timers Toggle
         self.gbu_toggle = QCheckBox("Enable GBU Timers (BETA)")
         self.gbu_toggle.setChecked(True)
         self.gbu_toggle.setStyleSheet("font-weight: bold; margin: 10px; color: black;")
         self.gbu_toggle.stateChanged.connect(self.toggle_gbu)
-        layout.addWidget(self.gbu_toggle, 0, Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.gbu_toggle)
         
-        shutdown_btn = QPushButton("TERMINATE LINK18")
-        shutdown_btn.setStyleSheet("background-color: #ff4444; color: white; padding: 10px; font-weight: bold; border-radius: 4px;")
-        shutdown_btn.clicked.connect(self.close)
-        layout.addWidget(shutdown_btn)
+        # Online Players Section
+        players_header = QLabel("Online Players:")
+        players_header.setStyleSheet("font-weight: bold; margin-top: 8px; color: #333;")
+        layout.addWidget(players_header)
+        
+        self.players_label = QLabel("No players connected")
+        self.players_label.setStyleSheet("color: #555; padding: 4px 8px;")
+        self.players_label.setWordWrap(True)
+        layout.addWidget(self.players_label)
         
         self.setLayout(layout)
+        
+        # Refresh player list every 2 seconds
+        self.player_timer = QTimer(self)
+        self.player_timer.timeout.connect(self.update_player_list)
+        self.player_timer.start(2000)
         
     def toggle_overlay(self, state):
         enabled = (state == 2) # Qt.CheckState.Checked
@@ -3498,12 +3737,57 @@ class ControllerWindow(QWidget):
     def toggle_gbu(self, state):
         enabled = (state == 2)
         self.overlay.show_gbu_timers = enabled
+        if hasattr(self, 'monitor'):
+            self.monitor.gbu_enabled = enabled
         print(f"[CONTROLLER] GBU Timers {'ENABLED' if enabled else 'DISABLED'}")
+
+    def update_player_list(self):
+        """Refresh the online players display"""
+        players = self.overlay.players
+        others = {k: v for k, v in players.items() if k != '_local'}
+        if not others:
+            self.players_label.setText("No players connected")
+            return
+        lines = []
+        for pid, p in others.items():
+            name = p.get('callsign', 'Unknown')
+            color = p.get('color', QColor(255, 255, 255))
+            hex_color = color.name() if hasattr(color, 'name') else str(color)
+            spd = p.get('spd', 0) or 0
+            alt = p.get('alt', 0) or 0
+            vehicle = p.get('vehicle', '')
+            # Infer status
+            if spd > 5 and alt > 50:
+                status = "In Flight"
+                status_color = "#44CC44"
+            elif spd > 0:
+                status = "On Ground"
+                status_color = "#CCCC44"
+            else:
+                status = "In Hangar"
+                status_color = "#888888"
+            vehicle_str = f' ({vehicle})' if vehicle else ''
+            lines.append(
+                f'<span style="color:{hex_color};">●</span> {name}'
+                f'{vehicle_str}'
+                f' — <span style="color:{status_color};">{status}</span>'
+            )
+        self.players_label.setText("<br>".join(lines))
+
+    def open_settings(self):
+        dlg = SettingsDialog(self.overlay, self)
+        dlg.exec()
         
     def closeEvent(self, event):
-        # Close the overlay when controller is closed
+        # Minimize to tray instead of closing
+        event.ignore()
+        self.hide()
+    
+    def quit_app(self):
+        """Actually quit the application"""
         self.overlay.close()
-        event.accept()
+        self.tray.hide()
+        QApplication.quit()
 
 def main():
     try:
@@ -3520,9 +3804,9 @@ def main():
         # Create Overlay (Hidden/Transparent)
         overlay = OverlayWindow()
         
-        # Create Controller (Visible Window)
+        # Create Controller (starts hidden in system tray)
+        app.setQuitOnLastWindowClosed(False)  # Keep running when controller is hidden
         controller = ControllerWindow(overlay)
-        controller.show()
         
         # Ensure overlay is initialized (it handles its own visibility via keys, 
         # but needs to be 'shown' to receive global events/painting if not fully hidden)
@@ -3538,6 +3822,7 @@ def main():
         monitor.calibrate_signal.connect(overlay.trigger_calibration)  # Connect M+N to calibration
         monitor.bomb_release_signal.connect(overlay.on_bomb_release) # Connect Spacebar
         monitor.toggle_console_signal.connect(overlay.toggle_console) # Connect J key
+        controller.monitor = monitor  # Give controller access to key monitor
         
         sys.exit(app.exec())
     except Exception as e:

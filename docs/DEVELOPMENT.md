@@ -186,6 +186,13 @@ Keep the release description basic. Specifically list **New Features** added in 
 > *   Added Web Map Toolbar (Compass, Planning Mode).
 > *   Added Auto-Calibration (M+N).
 > *   Added Real Name vehicle translation.
+>
+> **Link18 v1.6.0**
+>
+> **New Features:**
+> *   **System Tray Integration**: Controller now minimizes to tray to save screen space.
+> *   **Controller Improvements**: Settings UI, Online Player List with Status, reordered layout.
+> *   **Web Server Stability**: Fixes for Safari connection hangs and map proxy timeouts.
 
 ---
 
