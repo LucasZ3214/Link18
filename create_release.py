@@ -36,7 +36,7 @@ def build_executable():
         return False
 
 def create_release():
-    release_name = "Link18_v1.6.0.zip"
+    release_name = "Link18_v1.6.1.zip"
     
     # 0. Build
     if not build_executable():

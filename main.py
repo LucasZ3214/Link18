@@ -18,7 +18,7 @@ from jdamertti import BombTracker # Import BombTracker
 from vws import SoundManager # Import VWS
 
 # Version Tag
-VERSION_TAG = "v1.6.0"
+VERSION_TAG = "v1.6.1"
 
 # Configuration
 # Load Configuration
@@ -1879,7 +1879,8 @@ class OverlayWindow(QMainWindow):
                              others.append({
                                  'type': 'poi',
                                  'bearing': p_bearing,
-                                 'color': Qt.GlobalColor.yellow # Local POIs yellow
+                                 # Use user's configured color for local POIs
+                                 'color': QColor(CONFIG.get('color', '#FFFF00')) 
                              })
                              
                 if hasattr(self, 'shared_pois'):
@@ -3675,7 +3676,7 @@ class ControllerWindow(QWidget):
         
         shutdown_btn = QPushButton("TERMINATE LINK18")
         shutdown_btn.setStyleSheet("background-color: #ff4444; color: white; padding: 10px; font-weight: bold; border-radius: 4px;")
-        shutdown_btn.clicked.connect(self.close)
+        shutdown_btn.clicked.connect(self.quit_app)  # Calls quit_app(), not close()
         layout.addWidget(shutdown_btn)
         
         # Add map URL info
@@ -3783,7 +3784,7 @@ class ControllerWindow(QWidget):
         event.ignore()
         self.hide()
     
-    def quit_app(self):
+    def quit_app(self, *args):
         """Actually quit the application"""
         self.overlay.close()
         self.tray.hide()
@@ -3815,13 +3816,14 @@ def main():
         # Setup global key monitor
         activation_key = CONFIG.get('activation_key', 'm')
         monitor = KeyMonitor(activation_key)
-        monitor.show_signal.connect(overlay.set_marker_visible)
-        monitor.hide_signal.connect(overlay.set_marker_hidden)
+        # Force QueuedConnection to ensure UI updates happen on main thread (fix crash)
+        monitor.show_signal.connect(overlay.set_marker_visible, Qt.ConnectionType.QueuedConnection)
+        monitor.hide_signal.connect(overlay.set_marker_hidden, Qt.ConnectionType.QueuedConnection)
         # monitor.debug_signal.connect(overlay.toggle_debug) # Removed
-        monitor.broadcast_airfields_signal.connect(overlay.broadcast_airfields)  # Connect B key to broadcast
-        monitor.calibrate_signal.connect(overlay.trigger_calibration)  # Connect M+N to calibration
-        monitor.bomb_release_signal.connect(overlay.on_bomb_release) # Connect Spacebar
-        monitor.toggle_console_signal.connect(overlay.toggle_console) # Connect J key
+        monitor.broadcast_airfields_signal.connect(overlay.broadcast_airfields, Qt.ConnectionType.QueuedConnection)
+        monitor.calibrate_signal.connect(overlay.trigger_calibration, Qt.ConnectionType.QueuedConnection)
+        monitor.bomb_release_signal.connect(overlay.on_bomb_release, Qt.ConnectionType.QueuedConnection)
+        monitor.toggle_console_signal.connect(overlay.toggle_console, Qt.ConnectionType.QueuedConnection)
         controller.monitor = monitor  # Give controller access to key monitor
         
         sys.exit(app.exec())
