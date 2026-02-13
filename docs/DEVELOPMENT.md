@@ -141,10 +141,7 @@ The overlay requires precise alignment with the in-game map. We use OpenCV to au
 {"type": "point_of_interest", "id": "POI1", "x": 0.6, "y": 0.7, "owner": "Callsign"}
 ```
 
-**Team Chat:**
-```json
-{"type": "team_chat", "sender": "Pilot1", "message": "Attack D point!", "timestamp": 1234567890}
-```
+
 
 ### Build Commands
 
