@@ -35,7 +35,7 @@ except Exception as e:
     }
 
 API_URL = "http://127.0.0.1:8111/map_obj.json"
-POLL_INTERVAL_MS = 100
+POLL_INTERVAL_MS = 40
 UDP_PORT = CONFIG.get('udp_port', 50050)
 UDP_BROADCAST_IP = CONFIG.get('broadcast_ip', "255.255.255.255")
 
@@ -213,8 +213,8 @@ class OverlayWindow(QMainWindow):
         self.cached_predrop_color = QColor(150, 150, 150)
         self.cached_predrop_mode = "N/A"
         
-        self.team_chat_messages = [] # Received team chat messages from network
-        self.last_chat_id = 0 # Track last processed chat message ID
+        self.last_event_id = 0 # Track last processed HUD event ID
+        self.last_damage_id = 0 # Track last processed HUD damage ID
         self._last_log_t = 0 # Timer for diagnostic logging
         self.local_chat_cache = []  # Cache of local messages from 8111 API (for deduplication)
         self.map_calibrated = False # Track if map has been calibrated
@@ -225,6 +225,7 @@ class OverlayWindow(QMainWindow):
         self.map_ground_units = []
         
         self.show_formation_mode = False # Toggle state for Formation Info
+        self.respawn_timers = [] # List of active respawn timers {label, end_time, last_update}
         
         # Bomb Tracker & Console
         self.bomb_tracker = BombTracker()
@@ -350,10 +351,10 @@ class OverlayWindow(QMainWindow):
         self.timer.timeout.connect(self.process_web_commands)
         self.timer.start(POLL_INTERVAL_MS)
         
-        # Chat polling timer (every 2 seconds)
-        self.chat_timer = QTimer()
-        self.chat_timer.timeout.connect(self.poll_team_chat)
-        self.chat_timer.start(2000)  # 2 second interval
+        # HUD Message polling timer (every 1 second)
+        self.hud_timer = QTimer()
+        self.hud_timer.timeout.connect(self.poll_hud_messages)
+        self.hud_timer.start(1000)
         
         # Handle T- Timer logic (target: XX:00:00 every polling interval)
         
@@ -498,6 +499,15 @@ class OverlayWindow(QMainWindow):
                 'player_color': QColor(packet.get('player_color', '#FF0000')),
                 'last_seen': time.time()
             }
+
+            # FAST SYNC: Update Web Data Immediately
+            if hasattr(self, 'shared_data'):
+                # We can't easily append to the list without a full rebuild or knowing the index
+                # But since POIs are less frequent, we can trigger a flag or just wait for the 40ms loop.
+                # Actually, the user wants IMMEDIATE.
+                # Let's just rely on the 40ms loop for POIs as they are static.
+                # The critical part is PLAYERS impacting smoothness.
+                pass
             
             # Only log when position changes
             if position_changed:
@@ -507,31 +517,8 @@ class OverlayWindow(QMainWindow):
         
         # Check if this is a team chat packet
         if packet.get('type') == 'team_chat':
-            sender = packet.get('sender', 'Unknown')
-            message = packet.get('message', '')
-            
-            # Check against recent received messages to prevent loops
-            is_net_duplicate = any(
-                msg['sender'] == sender and msg['message'] == message
-                for msg in self.team_chat_messages[-15:] # Check last 15
-            )
-            
-            if not is_net_duplicate:
-                chat_msg = {
-                    'sender': sender,
-                    'message': message,
-                    'timestamp': packet.get('timestamp', time.time()),
-                    'time': time.time(),  # Local receive time for fading
-                    'local': False  # Mark as received from network
-                }
-                self.team_chat_messages.append(chat_msg)
-                # Keep only last 20 messages
-                if len(self.team_chat_messages) > 20:
-                    self.team_chat_messages = self.team_chat_messages[-20:]
-                print(f"[CHAT RX] {sender}: {message}")
-            else:
-                # Silently ignore duplicate
-                pass
+            # Chat functions removed per user request
+            pass
             return
         
         # Preserve existing trail
@@ -550,6 +537,11 @@ class OverlayWindow(QMainWindow):
             'last_seen': time.time(),
             'trail': existing_trail
         }
+        
+        # FAST SYNC: Update Web Data Immediately
+        if hasattr(self, 'shared_data') and 'players' in self.shared_data:
+             self.shared_data['players'][pid] = self.players[pid]
+
         self.update_trail(self.players[pid])
         self.update() # Trigger redraw for new network data
     
@@ -727,58 +719,97 @@ class OverlayWindow(QMainWindow):
     def clear_calibration_status(self):
         self.calibration_status = ""
         self.update()
+
+    def start_ito90_timer(self, killer_name=""):
+        """Start or group an ITO 90 respawn timer (15 mins)"""
+        current_time = time.time()
+        # Check for existing active ITO timer updated recently (< 5s)
+        grouped = False
+        
+        # Determine Label
+        # If we have a killer name, use it.
+        label_text = f"{killer_name} ItO 90M" if killer_name else "ItO 90M"
+
+        for timer in self.respawn_timers:
+            # Check if it looks like an ITO timer (contains ITO90 or ItO 90M)
+            if "ITO90" in timer['label'] or "ITO 90" in timer['label'] or "ItO 90M" in timer['label']:
+                if current_time - timer['last_update'] < 5.0:
+                    # Grouping: Restart timer, update last_update
+                    timer['end_time'] = current_time + 900
+                    timer['last_update'] = current_time
+                    # Update label to latest killer if provided
+                    if killer_name:
+                         timer['label'] = label_text
+                    
+                    print(f"[TIMER] Grouped ITO 90 destruction. Reset to 15m.")
+                    grouped = True
+                    break
+        
+        if not grouped:
+            self.respawn_timers.append({
+                'label': label_text,
+                'end_time': current_time + 900,
+                'last_update': current_time
+            })
+            print(f"[TIMER] Started new ITO 90 respawn timer (15m): {label_text}")
+        
+        # Sync to Web immediately
+        if hasattr(self, 'shared_data'):
+            self.shared_data['respawn_timers'] = self.respawn_timers
+            
+        self.update()
     
-    def poll_team_chat(self):
-        """Poll War Thunder chat API and broadcast team messages"""
+    def poll_hud_messages(self):
+        """Poll /hudmsg for destruction events"""
         try:
-            response = requests.get("http://127.0.0.1:8111/gamechat?lastId=" + str(self.last_chat_id), timeout=1.0)
+            # HUD MSG API: ?lastEvt=ID&lastDmg=ID
+            url = f"http://127.0.0.1:8111/hudmsg?lastEvt={self.last_event_id}&lastDmg={self.last_damage_id}"
+            # print(f"[DEBUG-NEW] Polling HUD: {url}")
+            response = requests.get(url, timeout=0.5)
+            
             if response.status_code == 200:
-                messages = response.json()
+                data = response.json()
                 
-                for msg in messages:
-                    msg_id = msg.get('id', 0)
-                    mode = msg.get('mode', 'All')
-                    sender = msg.get('sender', 'Unknown')
-                    text = msg.get('msg', '')
-                    enemy = msg.get('enemy', False)
-                    
-                    # Update last seen ID
-                    if msg_id > self.last_chat_id:
-                        self.last_chat_id = msg_id
-                    
-                    # Only process "Team" mode messages
-                    if mode == 'Team' and not enemy:
-                        # 1. Deduplicate against existing messages on overlay
-                        is_duplicate = any(
-                            msg['sender'] == sender and msg['message'] == text
-                            for msg in self.team_chat_messages[-15:]
-                        )
+                # Handle 'events' (Mission events, objectives, etc.)
+                events = data.get('events', [])
+                if events:
+                    for evt in events:
+                        evt_id = evt.get('id', 0)
+                        if evt_id > self.last_event_id:
+                            self.last_event_id = evt_id
+                            # Process generic events here if needed
+                
+                # Handle 'damage' (Kill logs, damage logs)
+                damage = data.get('damage', [])
+                if damage:
+                    # print(f"[DEBUG] Damage Items: {len(damage)}")
+                    for dmg in damage:
+                        dmg_id = dmg.get('id', 0)
+                        msg = dmg.get('msg', '')
+                        # print(f"[DEBUG] Item ID: {dmg_id} (Last: {self.last_damage_id})")
                         
-                        if not is_duplicate:
-                            # 2. Add to local overlay list
-                            self.team_chat_messages.append({
-                                'sender': sender,
-                                'message': text,
-                                'timestamp': time.time(),
-                                'time': time.time(),
-                                'local': False  # Will be marked True when received from network
-                            })
-                            if len(self.team_chat_messages) > 20:
-                                self.team_chat_messages = self.team_chat_messages[-20:]
+                        if dmg_id > self.last_damage_id:
+                            self.last_damage_id = dmg_id
+                            # print(f"[DEBUG] Updated Last Damage ID to {self.last_damage_id}")
+                            
+                            # Robust Check for ITO 90 (Ignore special chars like ▄)
+                            # User: "detect if include ItO 90M"
+                            if "destroyed" in msg and "ItO 90M" in msg:
+                                # Extract killer name
+                                # Default format: "Killer (Vehicle) destroyed ▄ItO 90M"
+                                killer_name = ""
+                                try:
+                                    if " destroyed " in msg:
+                                        parts = msg.split(" destroyed ")
+                                        killer_name = parts[0].strip()
+                                except:
+                                    pass
+                                    
+                                print(f"[HUD] Detected ITO 90 Kill: {msg} (Killer: {killer_name})")
+                                self.start_ito90_timer(killer_name)
                                 
-                            # 3. Broadcast all team messages (deduplication prevents loops)
-                            packet = {
-                                'type': 'team_chat',
-                                'sender': sender,
-                                'message': text,
-                                'timestamp': time.time()
-                            }
-                            try:
-                                self.broadcast_packet(packet)
-                                print(f"[CHAT TX] {sender}: {text}")
-                            except:
-                                pass
         except Exception as e:
+            # print(f"[ERROR] HUD Poll Error: {e}")
             pass
 
     def set_marker_hidden(self):
@@ -996,6 +1027,12 @@ class OverlayWindow(QMainWindow):
                         'owner': poi.get('callsign', 'Unknown')
                     })
                 self.shared_data['pois'] = pois_list
+                
+                # Sync Respawn Timers
+                # Also cleanup expired ones here to keep web in sync
+                current_t = time.time()
+                self.respawn_timers = [t for t in self.respawn_timers if t['end_time'] > current_t]
+                self.shared_data['respawn_timers'] = self.respawn_timers
                 
                 if self.show_debug:
                     print(f"[DEBUG-AF] Total: {len(self.airfields)}")
@@ -2615,11 +2652,8 @@ class OverlayWindow(QMainWindow):
                 current_time = time.time()
                 expired_pids = []
 
-        # (SAM Logic Moved OUTSIDE the 'if self.show_marker' block)
-
-            # --- Shared POIs Logic Continues ---
-            for pid, poi in self.shared_pois.items():
-                for pid, poi in self.shared_pois.items():
+                # Identify Expired
+                for pid, poi in list(self.shared_pois.items()):
                     # Check direct timeout
                     if current_time - poi.get('last_seen', 0) > 20:
                         expired_pids.append(pid)
@@ -2630,8 +2664,10 @@ class OverlayWindow(QMainWindow):
                     if not player or (current_time - player.get('last_seen', 0) > 30):
                         expired_pids.append(pid)
 
+                # Delete Expired
                 for pid in expired_pids:
-                    del self.shared_pois[pid]
+                    if pid in self.shared_pois:
+                        del self.shared_pois[pid]
                     
                 for pid, poi in self.shared_pois.items():
                     raw_x, raw_y = poi['x'], poi['y']
@@ -2675,71 +2711,6 @@ class OverlayWindow(QMainWindow):
                     
                     painter.restore()
 
-            # --- Draw Ground Units (Convoys/Tanks) ---
-            # DISABLED on Overlay per user request (Web Map only)
-            # if self.map_ground_units:
-            #    pass 
-
-
-
-
-        # --- TEAM CHAT BOX (Bottom Left) ---
-        # Only show when Map Overlay is visible (M pressed)
-        if self.show_marker and self.team_chat_messages:
-            chat_x = 10
-            chat_y = self.height() - 20  # Start from bottom, move up
-            line_height = 16
-            max_messages = 10
-            fade_duration = 30.0  # Seconds before message fades out
-            
-            current_time = time.time()
-            
-            # Get last N messages
-            visible_messages = self.team_chat_messages[-max_messages:]
-            
-            painter.setFont(QFont("Arial", 9))
-            
-            for i, msg in enumerate(reversed(visible_messages)):
-                msg_time = msg.get('time', current_time)
-                age = current_time - msg_time
-                
-                # Skip messages older than fade_duration
-                if age > fade_duration:
-                    continue
-                
-                # Calculate alpha (fade out in last 5 seconds)
-                if age > fade_duration - 5:
-                    alpha = int(255 * (fade_duration - age) / 5)
-                else:
-                    alpha = 255
-                
-                sender = msg.get('sender', 'Unknown')
-                text = msg.get('message', '')
-                is_local = msg.get('local', False)
-                
-                # Choose color
-                if is_local:
-                    # Use our own color for local messages
-                    sender_color = QColor(CONFIG.get('color', '#FFCC11'))
-                else:
-                    # White for network messages
-                    sender_color = QColor(255, 255, 255)
-                
-                sender_color.setAlpha(alpha)
-                text_color = QColor(220, 220, 220)
-                text_color.setAlpha(alpha)
-                
-                # Draw sender name
-                painter.setPen(QPen(sender_color))
-                painter.drawText(chat_x, chat_y - (i * line_height), f"{sender}: ")
-                
-                # Calculate sender name width
-                metrics = painter.fontMetrics()
-                sender_width = metrics.horizontalAdvance(f"{sender}: ")
-                
-                # Draw message text
-                painter.setPen(QPen(text_color))
-                painter.drawText(chat_x + sender_width, chat_y - (i * line_height), text)
 
         # --- DEBUG OVERLAY ---
         if DEBUG_MODE and self.show_marker:

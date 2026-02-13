@@ -95,6 +95,7 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                     'ground_units': SHARED_DATA.get('ground_units', []), # Ground units
                     'map_info': SHARED_DATA['map_info'],
                     'timer': SHARED_DATA['timer'],
+                    'respawn_timers': SHARED_DATA.get('respawn_timers', []),
                     'server_time': time.time(),
                     'config': {
                         'unit_is_kts': CONFIG.get('unit_is_kts', True),  # Speed unit setting

@@ -447,6 +447,11 @@
         </div>
     </div>
 
+    <!-- Respawn Timers Container (Bottom Left) -->
+    <div id="respawnTimers"
+        style="position: fixed; bottom: 20px; left: 20px; color: white; font-family: 'Courier New', monospace; font-size: 14px; background: rgba(0, 0, 0, 0.5); padding: 5px; border-radius: 4px; pointer-events: none; z-index: 100;">
+    </div>
+
     <div id="settingsPanel"
         style="display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0, 0, 0, 0.85); padding: 20px; border-radius: 8px; color: white; border: 1px solid #444; backdrop-filter: blur(10px); z-index: 1000; min-width: 250px;">
         <h3 style="margin-top: 0; border-bottom: 1px solid #555; padding-bottom: 10px;">Settings</h3>
@@ -1154,6 +1159,29 @@
                     updateTimer(lastData.timer);
                     updatePlayerList(lastData.players);
 
+                    // Update Respawn Timers
+                    const timersContainer = document.getElementById('respawnTimers');
+                    if (timersContainer) {
+                        if (lastData.respawn_timers && lastData.respawn_timers.length > 0) {
+                            timersContainer.style.display = 'block';
+                            let timerHtml = "";
+                            const now = Date.now() / 1000;
+                            lastData.respawn_timers.forEach(timer => {
+                                const remaining = Math.max(0, timer.end_time - now);
+                                if (remaining > 0) {
+                                    const m = Math.floor(remaining / 60);
+                                    const s = Math.floor(remaining % 60);
+                                    const timeStr = `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+                                    // Make label bold and yellow, time white
+                                    timerHtml += `<div><span style="color: #FFCC00; font-weight: bold;">${timer.label}:</span> ${timeStr}</div>`;
+                                }
+                            });
+                            timersContainer.innerHTML = timerHtml;
+                        } else {
+                            timersContainer.style.display = 'none';
+                        }
+                    }
+
                     // Immediate map bounds update (No animation)
                     mapMin = [...targetMapMin];
                     mapMax = [...targetMapMax];
@@ -1170,7 +1198,7 @@
                 }
             } finally {
                 isFetching = false;
-                setTimeout(fetchData, 100); // Schedule next fetch
+                setTimeout(fetchData, 33); // Schedule next fetch (approx 30Hz)
             }
         }
 
