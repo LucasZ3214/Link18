@@ -1,4 +1,4 @@
-# Link18 v1.6.0 - Tactical Overlay for War Thunder
+# Link18 v1.6.1 - Tactical Overlay for War Thunder
 
 **Link18** is a transparent tactical overlay and web-based map for War Thunder that enables real-time squad coordination via shared markers, flight timers, and NATO-standard unit symbology.
 
@@ -13,15 +13,14 @@
 
 ---
 
-## What's New in v1.6.0
+## What's New in v1.6.1
 
 | Feature | Description |
 |---------|-------------|
+| **ITO90 Respawn Timer** | Auto-detects ITO 90M destruction via HUD messages and starts a 15m timer sync'd to the web map |
 | **System Tray Controller** | App minimizes to tray with custom icon; context menu for controls |
 | **Web Server Stability** | Fixes for Safari keep-alive hangs and map proxy timeouts |
-| **Controller UI** | Reordered layout, Settings button on top, Status indicators for players |
-| **Voice Warning System (VWS)** | Audio alerts for SAM and AAA threats with customizable volume and interval |
-| **Performance: Threaded Telemetry** | All HTTP polling moved to background thread — zero main-thread blocking |
+| **VWS Audio** | Configurable voice/tone warnings for SAM and AAA threats |
 
 ---
 

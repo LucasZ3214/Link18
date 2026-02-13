@@ -238,7 +238,7 @@ Raw vehicle IDs (e.g., `f_16c_block_50`) are translated to human-readable names 
 | `/map_info.json` | Map Bounds | Polled on map change |
 | `/indicators` | Speed, Alt, Type | Polled 100ms |
 | `/state` | Fuel, Ammo | Polled 100ms |
-| `/gamechat` | Chat Msgs | Polled 2000ms |
+| `/hudmsg` | Destruction Events | Polled ~40ms (Main Thread) |
 
 ### Network Packet Handling
 
