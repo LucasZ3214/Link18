@@ -26,6 +26,7 @@ debug_*.png
 debug_*.jpg
 debug_*.py
 scrape_vehicles.py
+mock_wt_api.py
 WarThunder-localhost-documentation-master/
 Gamechat/
 Hudmsg/
