@@ -7,8 +7,9 @@ import os
 import time
 from datetime import datetime
 import numpy as np
+import traceback # Added for crash handling
 from PIL import Image, ImageDraw
-from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QDialog, QScrollArea, QFormLayout, QSpinBox, QDoubleSpinBox, QLineEdit, QCheckBox, QGroupBox, QSystemTrayIcon, QMenu
+from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame, QDialog, QScrollArea, QFormLayout, QSpinBox, QDoubleSpinBox, QLineEdit, QCheckBox, QGroupBox, QSystemTrayIcon, QMenu, QMessageBox
 from PyQt6.QtCore import Qt, QTimer, QPointF, QRectF, pyqtSignal, QObject, QThread, QLineF
 from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QFont, QPolygonF, QFontMetrics, QPainterPath, QIcon, QAction
 from pynput import keyboard
@@ -395,7 +396,12 @@ class OverlayWindow(QMainWindow):
             'pois': [],
             'map_info': {},
             'timer': {'flight_time': 0, 'spawn_time': None},
-            'commands': [] # Command queue from Web UI
+            'commands': [], # Command queue from Web UI
+            'commander': { # AWACS/Commander State
+                'markers': [], # [{'id':str, 'x':float, 'y':float, 'type':'fighter'|'hostile', 'label':str, 'color':str}]
+                'drawings': [], # [{'id':str, 'points':[[x,y],...], 'color':str}]
+                'active_commanders': [] # List of callsigns
+            }
         }
         
         # Conditionally start Web Map server
@@ -637,10 +643,47 @@ class OverlayWindow(QMainWindow):
                         
                     print(f"[DEBUG] Local POIs: {len(self.pois)} | Shared: {len(self.shared_data.get('pois', []))}")
                     self.update()
+                    self.update()
                 except Exception as e:
                     print(f"[CMD] Failed to create POI: {e}")
                     import traceback
                     traceback.print_exc()
+
+            # 4. Commander Mode - Drawings
+            elif cmd.get('type') == 'cmd_drawing_add':
+                data = cmd.get('data')
+                if data:
+                    if 'commander' not in self.shared_data:
+                        self.shared_data['commander'] = {'markers': [], 'drawings': []}
+                    if 'drawings' not in self.shared_data['commander']:
+                        self.shared_data['commander']['drawings'] = []
+                    
+                    self.shared_data['commander']['drawings'].append(data)
+                    print(f"[CMD] Added drawing: {data.get('id')}")
+
+            elif cmd.get('type') == 'cmd_drawing_clear':
+                if 'commander' in self.shared_data:
+                    self.shared_data['commander']['drawings'] = []
+                    print("[CMD] Cleared all drawings")
+
+            # 5. Commander Mode - Markers (Draggable)
+            elif cmd.get('type') == 'cmd_marker_update':
+                data = cmd.get('data')
+                if data:
+                    if 'commander' not in self.shared_data:
+                        self.shared_data['commander'] = {'markers': [], 'drawings': []}
+                    if 'markers' not in self.shared_data['commander']:
+                        self.shared_data['commander']['markers'] = []
+
+                    # Update or Append
+                    markers = self.shared_data['commander']['markers']
+                    existing = next((m for m in markers if m['id'] == data['id']), None)
+                    if existing:
+                        existing.update(data)
+                        print(f"[CMD] Updated marker: {data.get('id')}")
+                    else:
+                        markers.append(data)
+                        print(f"[CMD] Created marker: {data.get('id')}")
 
     def check_and_record_airfield(self, x, y):
         """Check if player is on an airfield and record altitude"""
@@ -816,15 +859,30 @@ class OverlayWindow(QMainWindow):
         self.show_marker = False
         self.update()
 
-    def check_web_commands(self):
+    def process_web_commands(self):
         """Check for commands from the Web UI"""
         if hasattr(self, 'shared_data') and 'commands' in self.shared_data and self.shared_data['commands']:
             # Process all pending commands
             while self.shared_data['commands']:
                 cmd = self.shared_data['commands'].pop(0)
+                cmd_type = cmd.get('type') or cmd.get('action') # Use 'type' or 'action' for command identification
                 
-                if cmd.get('action') == 'set_formation':
+
+
+                if cmd_type == 'cmd_drawing_add':
+                    # Add new drawing stroke
+                    d_data = cmd.get('data', {})
+                    if d_data.get('id'):
+                        self.shared_data['commander']['drawings'].append(d_data)
+
+                elif cmd_type == 'cmd_drawing_clear':
+                    # Clear all drawings
+                    self.shared_data['commander']['drawings'] = []
+
+                elif cmd_type == 'set_formation':
                     val = cmd.get('value', False)
+                    SHARED_DATA['formation_mode'] = val
+                    # Sync to local overlay state too
                     self.show_formation_mode = val
                     print(f"[CMD] Formation Mode set to: {val}")
                     self.update()
@@ -833,6 +891,8 @@ class OverlayWindow(QMainWindow):
                     self.planning_waypoints = cmd.get('waypoints', [])
                     print(f"[PLAN] Updated {len(self.planning_waypoints)} waypoints from Web UI")
                     self.update()
+
+
 
     def get_reference_grid_data(self):
         try:
@@ -1355,6 +1415,15 @@ class OverlayWindow(QMainWindow):
             self.broadcast_pois()
             self.last_poi_broadcast = current_time
         
+        # SYNC CONFIG TO WEB SERVER
+        if hasattr(self, 'shared_data'):
+            # Ensure config is up to date for the web client
+            self.shared_data['config'] = {
+                'callsign': CONFIG.get('callsign', 'Pilot'),
+                'color': CONFIG.get('color', '#FF0000'),
+                # Add other config keys if needed by dashboard
+            }
+
         # NOTE: Web sync now happens at correct location (after map_obj processing), not here.
         
         # Prune old network players (> 5s timeout)
@@ -3569,6 +3638,13 @@ class ControllerWindow(QWidget):
         self.overlay = overlay_window
         self.setup_tray()
         self.setup_ui()
+        
+        # Start Timer for Player List Updates
+        self.player_timer = QTimer(self)
+        self.player_timer.timeout.connect(self.update_player_list)
+        self.player_timer.start(2000) # Update every 2 seconds
+        # Force background color to avoid "white/blank" issues
+        self.setStyleSheet("background-color: #F0F0F0;")
         # Start minimized to tray
         self.hide()
         
@@ -3635,66 +3711,102 @@ class ControllerWindow(QWidget):
 
     def setup_ui(self):
         self.setWindowTitle("Link18 Controller")
-        self.setGeometry(100, 100, 350, 380)
+        self.setGeometry(100, 100, 350, 400)
         
+        # Main Layout
         layout = QVBoxLayout()
+        layout.setSpacing(10)
+        layout.setContentsMargins(20, 20, 20, 20)
         
-        # Settings Button (top)
-        settings_btn = QPushButton("\u2699  Settings")
-        settings_btn.setStyleSheet("background-color: #2d2d44; color: white; padding: 8px; font-weight: bold; border-radius: 4px; border: 1px solid #555;")
+        
+        # Settings Button
+        settings_btn = QPushButton(" Open Settings")
+        settings_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2d2d44; 
+                color: white; 
+                padding: 10px; 
+                font-weight: bold; 
+                border-radius: 5px; 
+                border: 1px solid #555;
+            }
+            QPushButton:hover { background-color: #3d3d54; }
+        """)
         settings_btn.clicked.connect(self.open_settings)
         layout.addWidget(settings_btn)
         
-        shutdown_btn = QPushButton("TERMINATE LINK18")
-        shutdown_btn.setStyleSheet("background-color: #ff4444; color: white; padding: 10px; font-weight: bold; border-radius: 4px;")
-        shutdown_btn.clicked.connect(self.quit_app)  # Calls quit_app(), not close()
-        layout.addWidget(shutdown_btn)
-        
-        # Add map URL info
-        map_url = QLabel("Web Map:http://localhost:8000")
+        # Map URL Link
+        map_url = QLabel("<a href='http://localhost:8000' style='color: #043FFF; text-decoration: none;'>Web Map: http://localhost:8000</a>")
+        map_url.setOpenExternalLinks(True)
         map_url.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        map_url.setStyleSheet("color: #043FFF; font-weight: bold;")
+        map_url.setStyleSheet("font-size: 14px; margin: 5px 0;")
         layout.addWidget(map_url)
 
+        # -- Toggles Group --
+        toggles_group = QWidget()
+        toggles_layout = QVBoxLayout(toggles_group)
+        toggles_layout.setContentsMargins(5, 5, 5, 5)
+        toggles_layout.setSpacing(5)
+        
         # Map Overlay Toggle
         self.overlay_toggle = QCheckBox("Enable Map Overlay")
         self.overlay_toggle.setChecked(CONFIG.get('default_map_visible', True))
-        self.overlay_toggle.setStyleSheet("font-weight: bold; margin: 10px; color: black;")
+        self.overlay_toggle.setStyleSheet("font-size: 14px; color: #222;")
         self.overlay_toggle.stateChanged.connect(self.toggle_overlay)
-        layout.addWidget(self.overlay_toggle)
+        toggles_layout.addWidget(self.overlay_toggle)
         
         # Formation Mode Toggle
         self.formation_toggle = QCheckBox("Enable Formation Mode")
-        # Default to False or whatever the overlay has. 
-        # But wait, overlay defaults to False. Let's assume False.
         self.formation_toggle.setChecked(False) 
-        self.formation_toggle.setStyleSheet("font-weight: bold; margin: 10px; color: black;")
+        self.formation_toggle.setStyleSheet("font-size: 14px; color: #222;")
         self.formation_toggle.stateChanged.connect(self.toggle_formation)
-        layout.addWidget(self.formation_toggle)
+        toggles_layout.addWidget(self.formation_toggle)
         
         # GBU Timers Toggle
         self.gbu_toggle = QCheckBox("Enable GBU Timers (BETA)")
         self.gbu_toggle.setChecked(True)
-        self.gbu_toggle.setStyleSheet("font-weight: bold; margin: 10px; color: black;")
+        self.gbu_toggle.setStyleSheet("font-size: 14px; color: #222;")
         self.gbu_toggle.stateChanged.connect(self.toggle_gbu)
-        layout.addWidget(self.gbu_toggle)
+        toggles_layout.addWidget(self.gbu_toggle)
         
-        # Online Players Section
+        layout.addWidget(toggles_group)
+        
+        # -- Online Players --
+        players_frame = QFrame()
+        players_frame.setStyleSheet("background-color: #FFFFFF; border: 1px solid #ccc; border-radius: 5px;")
+        p_layout = QVBoxLayout(players_frame)
+        
         players_header = QLabel("Online Players:")
-        players_header.setStyleSheet("font-weight: bold; margin-top: 8px; color: #333;")
-        layout.addWidget(players_header)
+        players_header.setStyleSheet("font-weight: bold; color: #333; border: none;")
+        p_layout.addWidget(players_header)
         
-        self.players_label = QLabel("No players connected")
-        self.players_label.setStyleSheet("color: #555; padding: 4px 8px;")
+        self.players_label = QLabel("Waiting for data...")
+        self.players_label.setStyleSheet("color: #555; padding: 2px; border: none;")
         self.players_label.setWordWrap(True)
-        layout.addWidget(self.players_label)
+        p_layout.addWidget(self.players_label)
+        
+        layout.addWidget(players_frame)
+        
+        layout.addStretch()
+        
+        # Shutdown Button (Bottom)
+        shutdown_btn = QPushButton("TERMINATE APP")
+        shutdown_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        shutdown_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #ff4444; 
+                color: white; 
+                padding: 12px; 
+                font-weight: bold; 
+                border-radius: 5px;
+                border: none;
+            }
+            QPushButton:hover { background-color: #cc0000; }
+        """)
+        shutdown_btn.clicked.connect(self.quit_app)
+        layout.addWidget(shutdown_btn)
         
         self.setLayout(layout)
-        
-        # Refresh player list every 2 seconds
-        self.player_timer = QTimer(self)
-        self.player_timer.timeout.connect(self.update_player_list)
-        self.player_timer.start(2000)
         
     def toggle_overlay(self, state):
         enabled = (state == 2) # Qt.CheckState.Checked
@@ -3713,38 +3825,73 @@ class ControllerWindow(QWidget):
             self.monitor.gbu_enabled = enabled
         print(f"[CONTROLLER] GBU Timers {'ENABLED' if enabled else 'DISABLED'}")
 
+        # Force update immediately to clear "Waiting..."
+        QTimer.singleShot(500, self.update_player_list)
+
     def update_player_list(self):
         """Refresh the online players display"""
+        # print("[DEBUG] Updating player list...") # Debug logging
         players = self.overlay.players
+        
+        lines = []
+        
+        # 1. Show Local Player (always first)
+        if '_local' in players:
+            p = players['_local']
+            cards = self.format_player_card(p, is_local=True)
+            lines.append(cards)
+            
+        # 2. Show Remote Players
         others = {k: v for k, v in players.items() if k != '_local'}
-        if not others:
+        if others:
+            for pid, p in others.items():
+                lines.append(self.format_player_card(p, is_local=False))
+        
+        if not lines:
             self.players_label.setText("No players connected")
             return
-        lines = []
-        for pid, p in others.items():
-            name = p.get('callsign', 'Unknown')
-            color = p.get('color', QColor(255, 255, 255))
-            hex_color = color.name() if hasattr(color, 'name') else str(color)
-            spd = p.get('spd', 0) or 0
-            alt = p.get('alt', 0) or 0
-            vehicle = p.get('vehicle', '')
-            # Infer status
-            if spd > 5 and alt > 50:
-                status = "In Flight"
-                status_color = "#44CC44"
-            elif spd > 0:
-                status = "On Ground"
-                status_color = "#CCCC44"
-            else:
-                status = "In Hangar"
-                status_color = "#888888"
-            vehicle_str = f' ({vehicle})' if vehicle else ''
-            lines.append(
-                f'<span style="color:{hex_color};">●</span> {name}'
-                f'{vehicle_str}'
-                f' — <span style="color:{status_color};">{status}</span>'
-            )
-        self.players_label.setText("<br>".join(lines))
+
+        # Join with <br> for HTML rendering
+        final_html = "<br>".join(lines)
+        self.players_label.setText(final_html)
+
+    def format_player_card(self, p, is_local=False):
+        name = p.get('callsign', 'Unknown')
+        
+        # Handle Color (QColor or Hex String)
+        color_val = p.get('color', '#FFFFFF')
+        if hasattr(color_val, 'name'):
+            hex_color = color_val.name()
+        else:
+            hex_color = str(color_val)
+            
+        spd = p.get('spd', 0) or 0
+        alt = p.get('alt', 0) or 0
+        vehicle = p.get('vehicle', '')
+        
+        # Status Logic
+        if spd > 5 and alt > 50:
+            status = "In Flight"
+            status_color = "#44CC44"
+        elif spd > 1:
+            status = "On Ground"
+            status_color = "#CCCC44"
+        else:
+            status = "In Hangar"
+            status_color = "#888888"
+            
+        vehicle_str = f' ({vehicle})' if vehicle else ''
+        
+        # Access marker for Local
+        prefix = "YOU" if is_local else "PLY"
+        prefix_style = "font-weight:bold; color:#00BBFF;" if is_local else "color:#999;"
+        
+        return (
+            f'<span style="{prefix_style}">[{prefix}]</span> '
+            f'<span style="color:{hex_color};">●</span> {name}'
+            f'{vehicle_str}'
+            f' — <span style="color:{status_color};">{status}</span>'
+        )
 
     def open_settings(self):
         dlg = SettingsDialog(self.overlay, self)
@@ -3761,47 +3908,81 @@ class ControllerWindow(QWidget):
         self.tray.hide()
         QApplication.quit()
 
-def main():
-    try:
-        # Display welcome screen
-        print_welcome()
-        
-        # Disable High DPI scaling to ensure 1:1 pixel mapping with game
-        import os
-        os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "0"
-        os.environ["QT_AUTO_SCREEN_SCALE_FACTOR"] = "0"
+def handle_exception(exc_type, exc_value, exc_traceback):
+    """Global exception handler to log crash and show message"""
+    if issubclass(exc_type, KeyboardInterrupt):
+        sys.__excepthook__(exc_type, exc_value, exc_traceback)
+        return
 
-        app = QApplication(sys.argv)
-        
-        # Create Overlay (Hidden/Transparent)
-        overlay = OverlayWindow()
-        
-        # Create Controller (starts hidden in system tray)
-        app.setQuitOnLastWindowClosed(False)  # Keep running when controller is hidden
-        controller = ControllerWindow(overlay)
-        
-        # Ensure overlay is initialized (it handles its own visibility via keys, 
-        # but needs to be 'shown' to receive global events/painting if not fully hidden)
-        overlay.show() 
-        
-        # Setup global key monitor
-        activation_key = CONFIG.get('activation_key', 'm')
-        monitor = KeyMonitor(activation_key)
-        # Force QueuedConnection to ensure UI updates happen on main thread (fix crash)
-        monitor.show_signal.connect(overlay.set_marker_visible, Qt.ConnectionType.QueuedConnection)
-        monitor.hide_signal.connect(overlay.set_marker_hidden, Qt.ConnectionType.QueuedConnection)
-        # monitor.debug_signal.connect(overlay.toggle_debug) # Removed
-        monitor.broadcast_airfields_signal.connect(overlay.broadcast_airfields, Qt.ConnectionType.QueuedConnection)
-        monitor.calibrate_signal.connect(overlay.trigger_calibration, Qt.ConnectionType.QueuedConnection)
-        monitor.bomb_release_signal.connect(overlay.on_bomb_release, Qt.ConnectionType.QueuedConnection)
-        monitor.toggle_console_signal.connect(overlay.toggle_console, Qt.ConnectionType.QueuedConnection)
-        controller.monitor = monitor  # Give controller access to key monitor
-        
-        sys.exit(app.exec())
+    error_msg = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
+    
+    # 1. Log to file
+    try:
+        with open("crash.log", "w") as f:
+            f.write(f"Crash Time: {datetime.now()}\n")
+            f.write("--------------------------------------------------\n")
+            f.write(error_msg)
     except Exception as e:
-        import traceback
-        traceback.print_exc()
-        input("Critical Error! Press Enter to close...")
+        print(f"Failed to write crash log: {e}")
+        
+    print("CRITICAL ERROR:", error_msg)
+    
+    # 2. Show user alert (if GUI is running)
+    app = QApplication.instance()
+    if app:
+        try:
+            error_box = QMessageBox()
+            error_box.setIcon(QMessageBox.Icon.Critical)
+            error_box.setText("Link18 has crashed!")
+            error_box.setInformativeText("An unexpected error occurred. A crash log has been saved to 'crash.log'.\n\nPlease send this log to the developer.")
+            error_box.setDetailedText(error_msg)
+            error_box.setWindowTitle("Link18 Critical Error")
+            error_box.setStandardButtons(QMessageBox.StandardButton.Ok)
+            error_box.exec()
+        except:
+            pass # Fallback if GUI fails
+    
+    sys.exit(1)
+
+def main():
+    # Register global exception handler
+    sys.excepthook = handle_exception
+
+    # Display welcome screen
+    print_welcome()
+    
+    # Disable High DPI scaling to ensure 1:1 pixel mapping with game
+    import os
+    os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "0"
+    os.environ["QT_AUTO_SCREEN_SCALE_FACTOR"] = "0"
+
+    app = QApplication(sys.argv)
+    
+    # Create Overlay (Hidden/Transparent)
+    overlay = OverlayWindow()
+    
+    # Create Controller (starts hidden in system tray)
+    app.setQuitOnLastWindowClosed(False)  # Keep running when controller is hidden
+    controller = ControllerWindow(overlay)
+    
+    # Ensure overlay is initialized (it handles its own visibility via keys, 
+    # but needs to be 'shown' to receive global events/painting if not fully hidden)
+    overlay.show() 
+    
+    # Setup global key monitor
+    activation_key = CONFIG.get('activation_key', 'm')
+    monitor = KeyMonitor(activation_key)
+    # Force QueuedConnection to ensure UI updates happen on main thread (fix crash)
+    monitor.show_signal.connect(overlay.set_marker_visible, Qt.ConnectionType.QueuedConnection)
+    monitor.hide_signal.connect(overlay.set_marker_hidden, Qt.ConnectionType.QueuedConnection)
+    # monitor.debug_signal.connect(overlay.toggle_debug) # Removed
+    monitor.broadcast_airfields_signal.connect(overlay.broadcast_airfields, Qt.ConnectionType.QueuedConnection)
+    monitor.calibrate_signal.connect(overlay.trigger_calibration, Qt.ConnectionType.QueuedConnection)
+    monitor.bomb_release_signal.connect(overlay.on_bomb_release, Qt.ConnectionType.QueuedConnection)
+    monitor.toggle_console_signal.connect(overlay.toggle_console, Qt.ConnectionType.QueuedConnection)
+    controller.monitor = monitor  # Give controller access to key monitor
+    
+    sys.exit(app.exec())
 
 if __name__ == "__main__":
     main()                               

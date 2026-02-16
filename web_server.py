@@ -41,6 +41,8 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
             self.send_header('Access-Control-Allow-Origin', '*')
+            self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
+            self.send_header('Pragma', 'no-cache')
             self.send_header('Connection', 'close')
             self.end_headers()
             
@@ -97,10 +99,12 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                     'timer': SHARED_DATA['timer'],
                     'respawn_timers': SHARED_DATA.get('respawn_timers', []),
                     'server_time': time.time(),
+                    'commander': SHARED_DATA.get('commander', {}),
                     'config': {
                         'unit_is_kts': CONFIG.get('unit_is_kts', True),  # Speed unit setting
                         'web_marker_scale': CONFIG.get('web_marker_scale', 2.3)  # Manual scaling factor
-                    }
+                    },
+                    'status': SHARED_DATA.get('status')
                 }
                 
                 self.wfile.write(json.dumps(response_data).encode('utf-8'))
@@ -181,6 +185,10 @@ def run_server(shared_data_ref, port=8000):
     global SHARED_DATA
     SHARED_DATA = shared_data_ref
     
+    # Initialize config immediately from global if empty
+    if not SHARED_DATA.get('config'):
+        SHARED_DATA['config'] = CONFIG.copy()
+    
     # Ensure web directory exists
     if not os.path.exists(DIRECTORY):
         os.makedirs(DIRECTORY)
@@ -194,17 +202,21 @@ def run_server(shared_data_ref, port=8000):
             super().__init__(*args, directory=DIRECTORY, **kwargs)
         
         def do_GET(self):
-            # API Override
-            if self.path == '/api/data':
+            # API & Proxy Handlers (Dynamic Content - handled by DashboardHandler logic)
+            if self.path == '/api/data' or self.path.startswith('/proxy/map.img'):
                 DashboardHandler.do_GET(self)
                 return
-            if self.path.startswith('/proxy/map.img'):
-                DashboardHandler.do_GET(self)
-                return
-            if self.path.startswith('/proxy/map.img'):
-                DashboardHandler.do_GET(self)
-                return
+
+            # Static File Serving (Standard SimpleHTTPRequestHandler behavior)
             super().do_GET()
+
+        def end_headers(self):
+            # Inject Cache-Control for Static Files (API handles its own)
+            # Check if this is a static file request (not API)
+            if not (self.path == '/api/data' or self.path.startswith('/proxy/map.img')):
+                self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
+                self.send_header('Pragma', 'no-cache')
+            super().end_headers()
 
         def do_POST(self):
             DashboardHandler.do_POST(self)

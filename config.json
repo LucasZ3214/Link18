@@ -4,7 +4,7 @@
     "activation_key": "m",
     "udp_port": 50050,
     "broadcast_ip": "10.147.17.255",
-    "disable_lan_broadcast": false,
+    "disable_lan_broadcast": true,
     "enable_map_overlay": true,
     "enable_web_map": true,
     "map_offset_x": 723,
@@ -18,6 +18,6 @@
     "enable_vws": false,
     "vws_normalize": true,
     "vws_volume": 0.15,
-    "vws_interval": 1,
+    "vws_interval": 1.0,
     "debug_mode": false
 }

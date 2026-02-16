@@ -390,6 +390,7 @@
                 <polygon points="18 13 21 19 18 17 15 19 18 13" fill="currentColor"></polygon>
             </svg>
         </button>
+        </button>
         <button id="convoyInfoBtn" class="toolbar-btn" onclick="toggleConvoyInfo()" title="Toggle Convoy Info">
             <!-- SVG Truck/Convoy -->
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
@@ -400,6 +401,55 @@
                 <circle cx="18.5" cy="18.5" r="2.5"></circle>
             </svg>
         </button>
+
+        <!-- AWACS / Commander Mode -->
+        <div style="display: flex; gap: 10px; align-items: flex-start;">
+            <button id="commanderBtn" class="toolbar-btn" onclick="toggleCommanderMode()"
+                title="AWACS / Commander Mode">
+                <!-- Scanning Radar Icon -->
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 20a8 8 0 1 0 0-16 8 8 0 0 0 0 16z"></path>
+                    <path d="M12 12L16 8"></path>
+                    <path d="M12 2v2"></path>
+                    <path d="M12 20v2"></path>
+                    <path d="M2.05 10h2"></path>
+                    <path d="M19.95 10h2"></path>
+                    <!-- Sweep Line (Animated-ish look) -->
+                    <path d="M12 12 L17 17 M12 12 L7 17" opacity="0.5"></path>
+                </svg>
+            </button>
+            <div id="commanderTools" style="display: none; flex-direction: column; gap: 10px;">
+                <!-- Fighter Marker (Draggable Source) -->
+                <div class="toolbar-btn" id="fighterDragSource" draggable="true"
+                    ondragstart="dragStartMarker(event, 'fighter')" title="Drag Fighter">
+                    <!-- NATO Air Friendly Icon -->
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="cyan" stroke-width="2">
+                        <!-- Frame: Rectangle -->
+                        <rect x="2" y="6" width="20" height="12" stroke="cyan" fill="rgba(0,255,255,0.1)"></rect>
+                        <!-- Symbol: Infinity (Fixed Wing) -->
+                        <path d="M7 12 C7 10, 9 10, 10 11 S 12 14, 12 14 S 13 10, 15 10 S 17 12, 17 12" stroke="cyan"
+                            fill="none"></path>
+                        <path d="M7 12 C7 14, 9 14, 10 13" stroke="cyan" fill="none"></path>
+                        <path d="M17 12 C17 14, 15 14, 14 13" stroke="cyan" fill="none"></path>
+                    </svg>
+                </div>
+                <!-- Pen Tool -->
+                <button id="penToolBtn" class="toolbar-btn" onclick="togglePenTool()" title="Pen Tool">
+                    <!-- Pencil Icon -->
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path>
+                    </svg>
+                </button>
+                <!-- Clear Drawings -->
+                <button id="clearDrawingsBtn" class="toolbar-btn" onclick="clearDrawings()" title="Clear All Drawings">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ff4444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="3 6 5 6 21 6"></polyline>`r`n                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                    </svg>
+                </button>
+            </div>
+        </div>
     </div>
     <div id="convoyInfoPanel"></div>
     <div id="timer">T+00:00:00</div>
@@ -410,7 +460,7 @@
         <button id="resetView" onclick="fitToScreen()" style="display: none; margin-right: 10px;">Reset View</button>
         <button onclick="toggleLegend()" style="margin-right: 10px;">Legend</button>
         <button onclick="toggleSettings()" style="margin-right: 10px;">Settings</button>
-        <button onclick="toggleFullscreen()">‚õ∂ Fullscreen</button>
+        <button onclick="toggleFullscreen()">‚õ?Fullscreen</button>
     </div>
 
     <!-- Speed Override Panel -->
@@ -439,7 +489,7 @@
                 <div class="keypad-btn" onclick="appendSpeedKey('3')">3</div>
                 <div class="keypad-btn" onclick="clearSpeedInput()" style="color: #ff8888;">C</div>
                 <div class="keypad-btn" onclick="appendSpeedKey('0')">0</div>
-                <div class="keypad-btn" onclick="backspaceSpeed()" style="color: #ffcc88;">‚Üê</div>
+                <div class="keypad-btn" onclick="backspaceSpeed()" style="color: #ffcc88;">‚Ü?/div>
             </div>
 
             <button class="keypad-btn" onclick="clearSpeedOverride()"
@@ -584,6 +634,7 @@
 
                 // Get mouse pos at startup
                 if (e.type === 'touchstart') {
+                    // e.preventDefault(); // Allow scrolling if needed? No, drag.
                     pos3 = e.touches[0].clientX;
                     pos4 = e.touches[0].clientY;
                 } else {
@@ -674,17 +725,14 @@
 
 
         // Configuration (will be updated from API)
-        // Default values based on user request:
-        // Size: [1400, 1400], Steps: [200, 200], Zero: [1585, 4080]
-        // Calculated Min: [1585, 4080] (Assume Zero is Top-Left)
-        // Calculated Max: [1585+1400, 4080+1400] = [2985, 5480]
-        let mapMin = [1585.0, 4080.0];
-        let mapMax = [2985.0, 5480.0];
-        let targetMapMin = [1585.0, 4080.0];
-        let targetMapMax = [2985.0, 5480.0];
+        let mapMin = [-1, -1];
+        let mapMax = [1, 1];
+        let targetMapMin = [-1, -1];
+        let targetMapMax = [1, 1];
         let gridSteps = [200.0, 200.0]; // [x, y] steps from API
-        let gridZero = [1585.0, 4080.0];  // [x, y] zero point from API
+        let gridZero = [0.0, 0.0];  // [x, y] zero point from API
 
+        const REFERENCE_MAP_SIZE = 2048.0; // Fixed logical resolution for coordinate consistency
         let dpr = window.devicePixelRatio || 1;
 
         // Viewport State (Absolute Screen Space)
@@ -858,8 +906,8 @@
         function fitToScreen() {
             // Remove early return to allow blank map init
 
-            const refW = mapLoaded ? mapImage.width : 2048;
-            const refH = mapLoaded ? mapImage.height : 2048;
+            const refW = REFERENCE_MAP_SIZE;
+            const refH = REFERENCE_MAP_SIZE;
 
             const mapAspect = refW / refH;
             const canvasAspect = window.innerWidth / window.innerHeight;
@@ -1015,7 +1063,12 @@
                     }
 
                     // Update status if we have data
-                    if (statusEl.innerText !== "Link18: Active") {
+                    // Update status if we have data
+                    if (lastData.status && lastData.status.text) {
+                        // Show Server Status Override
+                        statusEl.innerText = lastData.status.text;
+                        statusEl.style.color = lastData.status.color || "#00FF00";
+                    } else if (statusEl.innerText !== "Link18: Active") {
                         statusEl.innerText = "Link18: Active";
                         statusEl.style.color = "#00FF00";
                     }
@@ -1035,32 +1088,8 @@
                     const mMax = lastData.map_info.map_max;
 
                     if (mMin && mMax) {
-                        if (mapMin[0] === -1 || mapMin[0] === 0) { // First sync or invalid
-                            mapMin = [...mMin];
-                            mapMax = [...mMax];
-                            targetMapMin = [...mMin];
-                            targetMapMax = [...mMax];
-                        } else {
-                            targetMapMin = mMin;
-                            targetMapMax = mMax;
-                        }
-
-                        // "USE CENTRE AS 0,0?" Implementation
-                        // We explicitly force the map bounds to be centered around 0,0 based on the width/height.
-                        const wW = targetMapMax[0] - targetMapMin[0];
-                        const wH = targetMapMax[1] - targetMapMin[1];
-                        const halfW = wW / 2;
-                        const halfH = wH / 2;
-
-                        targetMapMin = [-halfW, -halfH];
-                        targetMapMax = [0, 0];
-                        const wW2 = targetMapMax[0] - targetMapMin[0]; // width didn't change, just validating
-                        const wH2 = targetMapMax[1] - targetMapMin[1];
-                        targetMapMin = [-wW, -wH]; // Re-apply based on 0,0 max
-
-                        // CRITICAL PATCH: Restore Top-Left Origin (Undo previous forcing)
-                        targetMapMin = lastData.map_info.map_min;
-                        targetMapMax = lastData.map_info.map_max;
+                        targetMapMin = mMin;
+                        targetMapMax = mMax;
 
                         if (lastData.map_info.grid_steps) gridSteps = lastData.map_info.grid_steps;
 
@@ -1121,24 +1150,10 @@
                             const offX = lastData.map_info.grid_offset_x || 0;
                             const offY = lastData.map_info.grid_offset_y || 0;
 
-                            if (gridZero && lastData.map_info.grid_size) {
-                                // "map overlay offset" - Applying the manual offsets
-                                // Assuming offX/offY are in METERS as per user hint earlier
-                                // But converting via pixel ratio if needed? 
-                                // Let's try direct meter subtraction/addition based on user "wrong direction" history.
-                                // If they set offset, we shift the calculated GridZero.
-
-                                const worldW = targetMapMax[0] - targetMapMin[0];
-                                if (worldW > 1) {
-                                    // MetersPerPixel logic from before was:
-                                    // const metersPerPx = worldW / 2048.0;
-                                    // gridZero[0] -= offX * metersPerPx;
-
-                                    // If the user inputs Meters directly in config, we just sub/add.
-                                    // Let's assume input is METERS.
-                                    gridZero[0] += offX;
-                                    gridZero[1] += offY;
-                                }
+                            if (gridZero) {
+                                // If the user inputs Meters directly in config, we just sub/add.
+                                gridZero[0] += offX;
+                                gridZero[1] += offY;
                             }
 
                             const gz = gridZero;
@@ -1209,8 +1224,135 @@
             draw();
         });
 
-        // Touch Interaction Logic
+        // --- Coordinate Systems (North-Up) ---
+        // --- Coordinate Systems (North-Up) ---
+        const Transformer = {
+            screenToWorld: function (sx, sy) {
+                const refW = REFERENCE_MAP_SIZE;
+                const refH = REFERENCE_MAP_SIZE;
+                if (refW === 0 || refH === 0 || viewScale === 0) return [0, 0];
+
+                const nx = (sx - viewOffsetX) / (refW * viewScale);
+                const ny = (sy - viewOffsetY) / (refH * viewScale);
+
+                const wW = targetMapMax[0] - targetMapMin[0];
+                const wH = targetMapMax[1] - targetMapMin[1];
+
+                // Y-Down Logic (Matches Local)
+                const wx = targetMapMin[0] + nx * wW;
+                const wy = targetMapMin[1] + ny * wH;
+
+                return [wx, wy];
+            },
+            worldToScreen: function (wx, wy) {
+                const wW = targetMapMax[0] - targetMapMin[0];
+                const wH = targetMapMax[1] - targetMapMin[1];
+                if (wW === 0 || wH === 0) return [0, 0];
+
+                // Y-Down Logic (Matches Local)
+                const nx = (wx - targetMapMin[0]) / wW;
+                const ny = (wy - targetMapMin[1]) / wH;
+
+                const refW = REFERENCE_MAP_SIZE;
+                const refH = REFERENCE_MAP_SIZE;
+                const sx = viewOffsetX + nx * refW * viewScale;
+                const sy = viewOffsetY + ny * refH * viewScale;
+
+                return [sx, sy];
+            }
+        };
+
+        // Aliases for compatibility if other code uses them (e.g. legacy drawing)
+        const screenToWorld = Transformer.screenToWorld;
+        const worldToScreen = Transformer.worldToScreen;
+
+        // --- Commander Mode Logic ---
+        let isCommanderMode = false;
+        let isPenActive = false;
+        let currentStroke = null;
+
+        function toggleCommanderMode() {
+            isCommanderMode = !isCommanderMode;
+            const btn = document.getElementById('commanderBtn');
+            const tools = document.getElementById('commanderTools');
+
+            if (btn) btn.classList.toggle('active', isCommanderMode);
+            if (tools) tools.style.display = isCommanderMode ? 'flex' : 'none';
+
+            if (!isCommanderMode) {
+                isPenActive = false;
+                const penBtn = document.getElementById('penToolBtn');
+                if (penBtn) penBtn.classList.remove('active');
+            }
+            draw();
+        }
+
+        function togglePenTool() {
+            isPenActive = !isPenActive;
+            const btn = document.getElementById('penToolBtn');
+            if (btn) btn.classList.toggle('active', isPenActive);
+        }
+
+        function clearDrawings() {
+            if (true) { // Confirmation removed
+                apiCommand({ type: 'cmd_drawing_clear' });
+            }
+        }
+
+        function apiCommand(data) {
+            fetch('/api/command', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            }).catch(e => console.error(e));
+        }
+
+
+
+        // Removed HTML5 Drag & Drop listeners as they are replaced by Click-to-Place logic
+        // Old Drop Logic Removed
+        // canvas.addEventListener('dragover'... deleted
+        // canvas.addEventListener('drop'... deleted
+
+        // --- Standard Pointer Events (Pen & Dragging Existing) ---
+        // Spliced into handlePointerUp / pointermove / pointerdown
+        // See updated listeners below.
+
         canvas.addEventListener('pointerdown', e => {
+            // Prevent default to stop mouse emulation on touch
+            // BUT careful: might block scrolling if not handled. 
+            // We want to block scrolling ONLY if interacting with map tools.
+            // Actually, we set touch-action: none in CSS, so browser shouldn't scroll anyway.
+            // Adding preventDefault() here is safe for "app-like" behavior.
+            e.preventDefault();
+
+
+
+            // --- Commander Drawing (High Priority) ---
+            if (isCommanderMode && isPenActive) {
+                // Map Screen -> World
+                const rect = canvas.getBoundingClientRect();
+                const scaleX = canvas.width / rect.width;
+                const scaleY = canvas.height / rect.height;
+                const sx = (e.clientX - rect.left); // Fixed: No scaling
+                const sy = (e.clientY - rect.top); // Fixed: No scaling
+
+                const [wx, wy] = Transformer.screenToWorld(sx, sy);
+
+                if (Number.isFinite(wx)) {
+                    currentStroke = {
+                        id: 'd_' + Date.now(),
+                        points: [[wx, wy]],
+                        color: lastData?.config?.color || '#FFFF00'
+                    };
+
+                    if (canvas.setPointerCapture) canvas.setPointerCapture(e.pointerId);
+                    e.preventDefault();
+                    return;
+                }
+            }
+
+            // Normal Pan/Zoom
             pointers.set(e.pointerId, e);
             pointerStart.set(e.pointerId, { x: e.clientX, y: e.clientY, time: Date.now() });
             if (pointers.size === 1) {
@@ -1228,6 +1370,31 @@
         });
 
         canvas.addEventListener('pointermove', e => {
+
+
+
+            if (isCommanderMode && isPenActive && currentStroke) {
+                if (e.buttons === 0) {
+                    // Mouse up outside?
+                    finishStroke();
+                    return;
+                }
+
+                const rect = canvas.getBoundingClientRect();
+                const scaleX = canvas.width / rect.width;
+                const scaleY = canvas.height / rect.height;
+                const sx = (e.clientX - rect.left); // Fixed: No scaling
+                const sy = (e.clientY - rect.top); // Fixed: No scaling
+
+                const [wx, wy] = Transformer.screenToWorld(sx, sy);
+                if (Number.isFinite(wx)) {
+                    currentStroke.points.push([wx, wy]);
+                    draw();
+                }
+                e.preventDefault();
+                return;
+            }
+
             if (!pointers.has(e.pointerId)) return;
             pointers.set(e.pointerId, e);
 
@@ -1285,7 +1452,40 @@
 
         function handlePointerUp(e) {
 
+            if (isCommanderMode && currentStroke) {
+                // Finalize Stroke
+                apiCommand({
+                    type: 'cmd_drawing_add',
+                    data: currentStroke // {id, points, color}
+                });
+
+                try {
+                    canvas.releasePointerCapture(e.pointerId);
+                } catch (err) { /* ignore */ }
+
+                currentStroke = null;
+                drawingPointerId = null;
+                pointers.delete(e.pointerId);
+                return;
+            }
+
+            if (isCommanderMode && draggingMarkerId) {
+                // Finalize Drag
+                // Find current pos from data (we updated it in move)
+                const m = lastData.commander.markers.find(m => m.id === draggingMarkerId);
+                if (m) {
+                    apiCommand({
+                        type: 'cmd_marker_update',
+                        data: m
+                    });
+                }
+                draggingMarkerId = null;
+                pointers.delete(e.pointerId);
+                return;
+            }
+
             // Tap Detection for Planning Mode
+
             const start = pointerStart.get(e.pointerId);
             if (start && (isPlanningMode || isPlacingPoi)) {
                 const dx = e.clientX - start.x;
@@ -1311,8 +1511,8 @@
         }
 
         function addScreenWaypoint(sx, sy) {
-            const refW = mapLoaded ? mapImage.width : 2048;
-            const refH = mapLoaded ? mapImage.height : 2048;
+            const refW = REFERENCE_MAP_SIZE;
+            const refH = REFERENCE_MAP_SIZE;
 
             // Inverse of: sx = viewOffsetX + nx * (refW * viewScale)
             // nx = (sx - viewOffsetX) / (refW * viewScale)
@@ -1324,7 +1524,11 @@
             draw();
             sendWaypoints();
         }
-        canvas.addEventListener('pointerleave', handlePointerUp);
+
+        // Attach to windown to catch lifts outside canvas
+        window.addEventListener('pointerup', handlePointerUp);
+        window.addEventListener('pointercancel', handlePointerUp);
+        // canvas.addEventListener('pointerleave', handlePointerUp); // Leave is bad if we have capture
 
         // --- POI Placement Logic ---
         let isPlacingPoi = false;
@@ -1353,8 +1557,8 @@
         }
 
         async function createSharedPoi(sx, sy) {
-            const refW = mapLoaded ? mapImage.width : 2048;
-            const refH = mapLoaded ? mapImage.height : 2048;
+            const refW = REFERENCE_MAP_SIZE;
+            const refH = REFERENCE_MAP_SIZE;
 
             const nx = (sx - viewOffsetX) / (refW * viewScale);
             const ny = (sy - viewOffsetY) / (refH * viewScale);
@@ -1552,8 +1756,8 @@
             ctx.imageSmoothingQuality = 'high';
 
             // Reference dimensions for coordinate mapping
-            const refW = mapLoaded ? mapImage.width : 2048;
-            const refH = mapLoaded ? mapImage.height : 2048;
+            const refW = REFERENCE_MAP_SIZE;
+            const refH = REFERENCE_MAP_SIZE;
 
             // Draw Background Map
             const mapDrawW = refW * viewScale;
@@ -1789,9 +1993,60 @@
 
             // --- PLANNING PATH MOVED TO END OF DRAW LOOP FOR TOP Z-ORDER ---
 
-            if (!lastData) {
-                ctx.restore();
-                return;
+            if (!lastData) { ctx.restore(); return; }
+
+            // --- COMMANDER MODE: DRAWINGS & MARKERS ---
+            // Render synchronized drawings
+            if (lastData.commander && lastData.commander.drawings) {
+                lastData.commander.drawings.forEach(d => {
+                    if (d.points && d.points.length > 0) {
+                        ctx.beginPath();
+                        ctx.lineWidth = 3 * viewScale; // Scale thickness
+                        ctx.strokeStyle = d.color || '#FFFF00';
+                        ctx.lineCap = 'round';
+                        ctx.lineJoin = 'round';
+
+                        let first = true;
+                        d.points.forEach(pt => {
+                            const [dsx, dsy] = Transformer.worldToScreen(pt[0], pt[1]);
+                            if (first) {
+                                ctx.moveTo(dsx, dsy);
+                                first = false;
+                            } else {
+                                ctx.lineTo(dsx, dsy);
+                            }
+                        });
+                        ctx.stroke();
+                    }
+                });
+            }
+
+            // Render local current stroke (while drawing)
+            if (isCommanderMode && currentStroke && currentStroke.points.length > 0) {
+                ctx.beginPath();
+                ctx.lineWidth = 3 * viewScale;
+                ctx.strokeStyle = currentStroke.color;
+                ctx.lineCap = 'round';
+                ctx.lineJoin = 'round';
+                let first = true;
+                currentStroke.points.forEach(pt => {
+                    const [dsx, dsy] = Transformer.worldToScreen(pt[0], pt[1]);
+                    if (first) {
+                        ctx.moveTo(dsx, dsy);
+                        first = false;
+                    } else {
+                        ctx.lineTo(dsx, dsy);
+                    }
+                });
+                ctx.stroke();
+            }
+
+            // Render Commander Markers (Fighters, etc.)
+            if (lastData.commander && lastData.commander.markers) {
+                lastData.commander.markers.forEach(m => {
+                    const [msx, msy] = Transformer.worldToScreen(m.x, m.y);
+                    drawCommanderIcon(ctx, msx, msy, m.type, m.color, m.label);
+                });
             }
 
 
@@ -1917,6 +2172,82 @@
                     ctx.textBaseline = 'bottom';
                     // Position above the marker
                     ctx.fillText(count.toString(), 0, markerTop - 2 * markerScale);
+                }
+
+                ctx.restore();
+            }
+
+            function drawCommanderIcon(ctx, x, y, type, color, label) {
+                ctx.save();
+                ctx.translate(x, y);
+
+                // Glow effect
+                ctx.shadowColor = color;
+                ctx.shadowBlur = 10;
+
+                ctx.strokeStyle = color;
+                ctx.lineWidth = 2;
+                ctx.fillStyle = color; // For fill opacity
+
+                if (type === 'fighter') {
+                    // NATO Friendly Air: Rectangle with Fixed Wing (Infinity-ish) symbol
+                    const size = markerScale * 25; // Base size
+                    const rectW = size * 1.5;
+                    const rectH = size * 1.0;
+
+                    // Draw Frame (Rectangle)
+                    ctx.beginPath();
+                    ctx.rect(-rectW / 2, -rectH / 2, rectW, rectH);
+                    ctx.fillStyle = color; // Fill uses the color (typically cyan)
+                    ctx.globalAlpha = 0.2; // Low opacity fill
+                    ctx.fill();
+                    ctx.globalAlpha = 1.0;
+                    ctx.strokeStyle = color;
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+
+                    // Draw Symbol (Fixed Wing / Infinity)
+                    // Simplified "sideways 8" or two loops
+                    // Start left loop
+                    const wingW = rectW * 0.6;
+                    const wingH = rectH * 0.4;
+
+                    ctx.beginPath();
+                    ctx.strokeStyle = color; // or black/white depending on contrast? Stick to color for neon look
+                    ctx.lineWidth = 2;
+
+                    // Bezier curves for infinity symbol centered at 0,0
+                    // Left Loop
+                    ctx.moveTo(0, 0);
+                    ctx.bezierCurveTo(-wingW / 2, -wingH, -wingW, 0, 0, 0);
+                    // Right Loop
+                    ctx.moveTo(0, 0);
+                    ctx.bezierCurveTo(wingW / 2, -wingH, wingW, 0, 0, 0);
+
+                    // Bottom curves? The symbol is traditionally two loops up, tied at bottom.
+                    // Actually standard is 'loop-loop' like a bow tie or infinity. 
+                    // Let's do a simple bow-tie shape for "Fixed Wing"
+
+                    // Clear previous path logic, do simple bow tie
+                    const bw = rectW * 0.3;
+                    const bh = rectH * 0.25;
+
+                    ctx.beginPath();
+                    ctx.moveTo(0, 0);
+                    // Left Loop
+                    ctx.bezierCurveTo(-bw, -bh, -bw, bh, 0, 0);
+                    // Right Loop
+                    ctx.bezierCurveTo(bw, -bh, bw, bh, 0, 0);
+
+                    ctx.stroke();
+                }
+
+                if (label) {
+                    ctx.shadowBlur = 0;
+                    ctx.fillStyle = "#FFFFFF";
+                    ctx.font = `bold ${12 * markerScale}px Arial`;
+                    ctx.textAlign = "center";
+                    ctx.fillText(label, 0, 20 * markerScale);
                 }
 
                 ctx.restore();
@@ -3678,8 +4009,8 @@
             // --- Scale Bar (Ruler Style) ---
             if (worldWidth > 0) {
                 const mapSizeM = worldWidth;
-                const refW = mapLoaded ? mapImage.width : 2048;
-                const refH = mapLoaded ? mapImage.height : 2048;
+                const refW = REFERENCE_MAP_SIZE;
+                const refH = REFERENCE_MAP_SIZE;
 
                 const pixelsPerKm = (mapDrawW * dpr / worldWidth) * 1000;
                 // 1 NM = 1.852 km. Pixels per NM is larger.
@@ -3804,6 +4135,51 @@
                 ctx.strokeText("km", barX + barWidth + (10 * markerScale), labelY);
                 ctx.fillText("km", barX + barWidth + (10 * markerScale), labelY);
 
+                // --- Commander Drawings ---
+                if (false && lastData && lastData.commander && lastData.commander.drawings) {
+                    ctx.save();
+                    ctx.lineCap = 'round';
+                    ctx.lineJoin = 'round';
+
+                    lastData.commander.drawings.forEach(d => {
+                        if (!d.points || d.points.length < 2) return;
+
+                        ctx.beginPath();
+                        ctx.strokeStyle = d.color || '#FFFF00';
+                        ctx.lineWidth = 3 * markerScale;
+
+                        let first = true;
+                        for (let p of d.points) {
+                            const [sx, sy] = Transformer.worldToScreen(p[0], p[1]);
+                            if (first) { ctx.moveTo(sx, sy); first = false; }
+                            else { ctx.lineTo(sx, sy); }
+                        }
+                        ctx.stroke();
+                    });
+                    ctx.restore();
+                }
+
+                // Current Stroke
+                if (false && currentStroke) { // Legacy Loop Disabled
+                    ctx.save();
+                    ctx.lineCap = 'round';
+                    ctx.lineJoin = 'round';
+                    ctx.beginPath();
+                    ctx.strokeStyle = currentStroke.color;
+                    ctx.lineWidth = 3 * markerScale;
+
+                    let first = true;
+                    for (let p of currentStroke.points) {
+                        const [sx, sy] = Transformer.worldToScreen(p[0], p[1]);
+                        if (first) { ctx.moveTo(sx, sy); first = false; }
+                        else { ctx.lineTo(sx, sy); }
+                    }
+                    ctx.stroke();
+                    ctx.restore();
+                }
+
+                // --- Commander Mode Rendering ---
+
 
                 // --- DRAW NM RULER (Bottom) ---
                 // Positioned below KM ruler.
@@ -3913,145 +4289,18 @@
 
                 ctx.restore();
             }
+
+            // --- Commander Mode Rendering ---
+            // (Duplicate Commander Loop Removed)
+
+
         }
 
         // Start Loops
         resize();
-        resize();
         // setInterval(fetchData, 100); // Disabled preventing race condition
         fetchData(); // Start recursive loop
         setInterval(loadMap, 30000);  // Refresh map every 30s 
-        // Actually checking map generation might be heavy. 
-        // Maybe only on explicit reload? 
-        // War Thunder map doesn't change mid-game usually.
-
-        // DISABLED OVERRIDE
-        async function DISABLED_fetchData() {
-            try {
-                const response = await fetch('/api/data');
-                if (response.ok) {
-                    lastData = await response.json();
-                    failCount = 0; // Reset counter on success
-
-                    // Update status if we have data
-                    if (statusEl.innerText !== "Link18: Active") {
-                        statusEl.innerText = "Link18: Active";
-                        statusEl.style.color = "#00FF00";
-                    }
-
-                    if (lastData.map_info) {
-                        // Smoothly interpolate bounds to prevent jitter
-                        const mMin = lastData.map_info.map_min;
-                        const mMax = lastData.map_info.map_max;
-
-                        if (mMin && mMax) {
-                            if (mapMin[0] === -1 || mapMin[0] === 0) { // First sync or invalid
-                                mapMin = [...mMin];
-                                mapMax = [...mMax];
-                                targetMapMin = [...mMin];
-                                targetMapMax = [...mMax];
-                            } else {
-                                targetMapMin = mMin;
-                                targetMapMax = mMax;
-                            }
-
-                            // "use the most bottom right corner adn - the grid zero values"
-                            // 1. Revert origin forcing (use natural API bounds logic above)
-                            // 2. Adjust gridZero relative to Bottom-Right (Max)
-
-                            if (lastData.map_info.grid_steps) gridSteps = lastData.map_info.grid_steps;
-
-                            if (lastData.map_info.grid_zero) {
-                                // Original Grid Zero from API
-                                const rawGz = lastData.map_info.grid_zero;
-
-                                // New Logic: GridZero = GridSize - RawGridZero
-                                // as requested: "for grid zero, use \"grid_size\" - \"grid_zero\" for the point"
-                                // rawGz already declared above
-                                const gridSize = lastData.map_info.grid_size || [0, 0];
-
-                                gridZero = [
-                                    gridSize[0] - rawGz[0],
-                                    gridSize[1] - rawGz[1]
-                                ];
-                            } else {
-                                gridZero = null;
-                            }
-
-                            // AUTO FOCUS: Move View to Grid (One Time) 
-                            if (gridZero && lastData.map_info.grid_size) {
-                                const gz = gridZero;
-                                const gs = lastData.map_info.grid_size;
-
-                                if (!window.hasFocusedGrid) {
-                                    const worldW = targetMapMax[0] - targetMapMin[0];
-                                    const worldH = targetMapMax[1] - targetMapMin[1];
-
-                                    // Safety check for map bounds
-                                    if (worldW > 1 && worldH > 1) {
-                                        const gridW = gs[0] || 14000;
-                                        const gridH = gs[1] || 14000;
-
-                                        const nGridX = (gz[0] - targetMapMin[0]) / worldW;
-                                        const nGridY = (gz[1] - targetMapMin[1]) / worldH;
-                                        const nGridW = gridW / worldW;
-                                        const nGridH = gridH / worldH;
-
-                                        const pad = 0.8;
-                                        const screenW = window.innerWidth;
-                                        const screenH = window.innerHeight;
-                                        const refW = mapLoaded ? mapImage.width : 2048;
-                                        const refH = mapLoaded ? mapImage.height : 2048;
-
-                                        // Avoid Division by Zero
-                                        if (refW > 0 && nGridW > 0.0001) {
-                                            const scaleX = (screenW * pad) / (refW * nGridW);
-                                            const scaleY = (screenH * pad) / (refH * nGridH);
-
-                                            let targetScale = Math.min(Math.min(scaleX, scaleY), 20.0);
-                                            targetScale = Math.max(targetScale, 0.1);
-
-                                            viewScale = targetScale;
-
-                                            const nCx = nGridX + nGridW / 2;
-                                            const nCy = nGridY + nGridH / 2;
-
-                                            viewOffsetX = (screenW / 2) - (nCx * refW * viewScale);
-                                            viewOffsetY = (screenH / 2) - (nCy * refH * viewScale);
-
-                                            isAutoFollow = false;
-                                            document.getElementById('resetView').style.display = 'inline-block';
-                                            window.hasFocusedGrid = true;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    updateTimer(lastData.timer);
-                }
-            } catch (error) {
-                console.error('Fetch error:', error);
-                failCount++;
-                if (failCount > 10) { // 2 seconds of failure
-                    statusEl.innerText = "Link18: Disconnected";
-                    statusEl.style.color = "#FF0000";
-                }
-            }
-        }
-        function toggleFullscreen() {
-            if (!document.fullscreenElement) {
-                document.documentElement.requestFullscreen().catch(err => {
-                    console.error(`Fullscreen error: ${err.message}`);
-                });
-            } else {
-                if (document.exitFullscreen) {
-                    document.exitFullscreen();
-                }
-            }
-        }
-
-        loadMap();
 
     </script>
 </body>
