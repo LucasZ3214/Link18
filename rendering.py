@@ -811,6 +811,7 @@ class RenderingMixin:
             painter.restore()
             painter.restore()
 
+
         # --- Draw Airfield Labels & Features ---
         self._draw_airfield_labels(painter)
 
@@ -832,6 +833,10 @@ class RenderingMixin:
             return
 
         map_size_m = float(CONFIG.get('map_size_meters', 65000))
+        if hasattr(self, 'map_bounds') and self.map_bounds:
+            map_min = self.map_bounds.get('map_min', [0, 0])
+            map_max = self.map_bounds.get('map_max', [map_size_m, map_size_m])
+            map_size_m = max(map_max[0] - map_min[0], map_max[1] - map_min[1])
 
         for idx, airfield in enumerate(self.airfields):
             raw_x, raw_y = airfield['x'], airfield['y']
@@ -858,7 +863,7 @@ class RenderingMixin:
             painter.setPen(QPen(c, 6))
             painter.drawLine(int(-runway_len / 2), 0, int(runway_len / 2), 0)
 
-            # 12km radius circle for long runways
+            # 12km radius circle for long runways (>3000m) — both friendly and enemy
             runway_meters = (airfield.get('len', 0) * map_size_m)
             if runway_meters > 3000:
                 radius_normalized = 12000 / map_size_m
@@ -1023,7 +1028,7 @@ class RenderingMixin:
         painter.drawText(int(bar_x + bar_width - tw), int(map_label_y), label)
 
     def _draw_spaa_circles(self, painter):
-        """Draw 4.5km radius circles around SPAA clusters."""
+        """Draw 4.5km or 12km radius circles around SPAA/SAM clusters."""
         if not hasattr(self, 'map_ground_units') or not self.map_ground_units:
             return
 
@@ -1040,6 +1045,7 @@ class RenderingMixin:
             icon = (unit.get('icon') or '').lower()
             if 'aa' in icon or 'spaa' in icon or 'sam' in icon:
                 unit_x, unit_y = unit.get('x', 0), unit.get('y', 0)
+                is_sam = 'sam' in icon
                 added = False
 
                 for cluster in spaa_clusters:
@@ -1049,32 +1055,24 @@ class RenderingMixin:
                         cluster['x'] = (cluster['x'] * n + unit_x) / (n + 1)
                         cluster['y'] = (cluster['y'] * n + unit_y) / (n + 1)
                         cluster['count'] += 1
+                        if is_sam: cluster['is_sam'] = True
                         added = True
                         break
 
                 if not added:
                     spaa_clusters.append({
                         'x': unit_x, 'y': unit_y, 'count': 1,
-                        'color': unit.get('color', '#FF0000')
+                        'color': unit.get('color', '#FF0000'),
+                        'is_sam': is_sam
                     })
 
         for cluster in spaa_clusters:
-            is_near_airfield = False
-            if hasattr(self, 'airfields') and self.airfields:
-                for af in self.airfields:
-                    af_x, af_y = af.get('x', 0), af.get('y', 0)
-                    dist = ((cluster['x'] - af_x) ** 2 + (cluster['y'] - af_y) ** 2) ** 0.5
-                    if dist < 0.08:
-                        is_near_airfield = True
-                        break
-
-            if is_near_airfield:
-                continue
-
             cx = CONFIG.get('map_offset_x', 0) + (cluster['x'] * CONFIG.get('map_width', 800))
             cy = CONFIG.get('map_offset_y', 0) + (cluster['y'] * CONFIG.get('map_height', 800))
 
-            radius_normalized = 4500 / map_size_m
+            # Dynamic radius: 12km for SAM, 4.5km for AAA
+            radius_m = 12000 if cluster.get('is_sam') else 4500
+            radius_normalized = radius_m / map_size_m
             radius_pixels = radius_normalized * CONFIG.get('map_width', 800)
 
             color_str = str(cluster.get('color', '#FF0000'))
@@ -1083,7 +1081,10 @@ class RenderingMixin:
 
             painter.save()
             painter.translate(cx, cy)
-            pen = QPen(circle_color, 3, Qt.PenStyle.DashLine)
+            
+            # SAM circles are thicker
+            pen_width = 4 if cluster.get('is_sam') else 3
+            pen = QPen(circle_color, pen_width, Qt.PenStyle.DashLine)
             painter.setPen(pen)
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawEllipse(int(-radius_pixels), int(-radius_pixels),
@@ -1117,6 +1118,87 @@ class RenderingMixin:
             painter.setPen(QPen(Qt.GlobalColor.white))
             painter.setFont(QFont("Arial", 8, QFont.Weight.Bold))
             painter.drawText(-15, -20, CONFIG.get('callsign', 'Me'))
+            painter.restore()
+
+    def _draw_objectives(self, painter):
+        """Draw bombing points, defense points, and capture zones."""
+        if not hasattr(self, 'map_objectives') or not self.map_objectives:
+            return
+
+        for obj in self.map_objectives:
+            raw_x, raw_y = obj['x'], obj['y']
+            if raw_x is None or raw_y is None: continue
+            
+            x = CONFIG.get('map_offset_x', 0) + (raw_x * CONFIG.get('map_width', 800))
+            y = CONFIG.get('map_offset_y', 0) + (raw_y * CONFIG.get('map_height', 800))
+
+            painter.save()
+            painter.translate(x, y)
+
+            color_str = obj.get('color', '#FFFFFF')
+            color = QColor(color_str)
+            
+            otype = obj.get('type')
+            if otype == 'capture_zone':
+                # Draw diamond-style square for capture zone
+                painter.rotate(45)
+                painter.setPen(QPen(color, 2))
+                if obj.get('blink'):
+                    alpha = 100 + int(70 * math.sin(time.time() * 8))
+                    color.setAlpha(max(0, min(255, alpha)))
+                
+                painter.setBrush(QBrush(color))
+                size = 12 * self.marker_scale
+                painter.drawRect(QRectF(-size/2, -size/2, size, size))
+            else:
+                # Bombing/Defending points: Target reticle
+                painter.setPen(QPen(color, 2))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                radius = 7 * self.marker_scale
+                painter.drawEllipse(QPointF(0, 0), radius, radius)
+                painter.drawLine(QPointF(-radius*1.4, 0), QPointF(radius*1.4, 0))
+                painter.drawLine(QPointF(0, -radius*1.4), QPointF(0, radius*1.4))
+
+            painter.restore()
+
+    def _draw_ground_units(self, painter):
+        """Draw ground units like tanks, AAA, etc."""
+        if not hasattr(self, 'map_ground_units') or not self.map_ground_units:
+            return
+
+        for unit in self.map_ground_units:
+            raw_x, raw_y = unit['x'], unit['y']
+            if raw_x is None or raw_y is None: continue
+            
+            x = CONFIG.get('map_offset_x', 0) + (raw_x * CONFIG.get('map_width', 800))
+            y = CONFIG.get('map_offset_y', 0) + (raw_y * CONFIG.get('map_height', 800))
+
+            painter.save()
+            painter.translate(x, y)
+
+            color_str = str(unit.get('color', '#FF0000'))
+            color = QColor(color_str)
+            painter.setPen(QPen(color, 1))
+            painter.setBrush(QBrush(color))
+
+            icon = (unit.get('icon') or '').lower()
+            size = 6 * self.marker_scale
+
+            if 'aa' in icon or 'spaa' in icon or 'sam' in icon:
+                 # AA: Box with cross
+                 painter.drawRect(QRectF(-size/2, -size/2, size, size))
+                 painter.setPen(QPen(Qt.GlobalColor.black, 1))
+                 painter.drawLine(QPointF(-size/2, -size/2), QPointF(size/2, size/2))
+                 painter.drawLine(QPointF(size/2, -size/2), QPointF(-size/2, size/2))
+            elif 'tank' in icon or 'armoured' in icon:
+                 # Tank: Square
+                 painter.drawRect(QRectF(-size/2, -size/2, size, size))
+                 painter.setPen(QPen(Qt.GlobalColor.black, 1))
+                 painter.drawRect(QRectF(-size/4, -size/4, size/2, size/2))
+            else:
+                 # Generic: Hexagon or Dot
+                 painter.drawEllipse(QPointF(0, 0), size/2, size/2)
+
             painter.restore()
 
     def _draw_shared_pois(self, painter):
