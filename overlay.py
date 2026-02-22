@@ -34,7 +34,7 @@ except ImportError:
         def get_logs(self): return []
 
 try:
-    from sound_manager import SoundManager
+    from vws import SoundManager
 except ImportError:
     class SoundManager:
         def __init__(self, **kw): self.enabled = False
