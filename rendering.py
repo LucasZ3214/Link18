@@ -594,6 +594,16 @@ class RenderingMixin:
             painter.setPen(QPen(status_color))
             painter.drawText(2, 26, f"{self.calibration_status}")
 
+        cmd_name = None
+        if hasattr(self, 'shared_data') and 'commander' in self.shared_data:
+            cmd_name = self.shared_data['commander'].get('active_commander')
+        
+        if cmd_name:
+            painter.setPen(QPen(Qt.GlobalColor.green))
+            painter.setFont(QFont("Arial", 10, QFont.Weight.Bold))
+            y_pos = 39 if self.calibration_status else 26
+            painter.drawText(2, y_pos, f"Commander: {cmd_name}")
+
         # Draw Player List
         if self.show_marker:
             self._draw_player_list(painter, screen_width, right_margin)

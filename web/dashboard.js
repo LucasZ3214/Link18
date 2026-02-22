@@ -1,1125 +1,1252 @@
 ﻿const canvas = document.getElementById('mapCanvas');
-        const ctx = canvas.getContext('2d');
-        const statusEl = document.getElementById('status');
-        const timerEl = document.getElementById('timer');
-        const playerListEl = document.getElementById('playerList');
+const ctx = canvas.getContext('2d');
+const statusEl = document.getElementById('status');
+const timerEl = document.getElementById('timer');
+const playerListEl = document.getElementById('playerList');
 
-        // Map State
-        let mapImage = new Image();
-        let mapLoaded = false;
-        let lastData = null;
-        // POI OTA State (New)
-        let showPoiEta = false; // Toggle state for Distance/ETA
-        let showFormationMode = false; // Toggle state for Formation Info
+// Map State
+let mapImage = new Image();
+let mapLoaded = false;
+let lastData = null;
+// POI OTA State (New)
+let showPoiEta = false; // Toggle state for Distance/ETA
+let showFormationMode = false; // Toggle state for Formation Info
 
-        function togglePoiEta() {
-            showPoiEta = !showPoiEta;
-            const btn = document.getElementById('poiEtaBtn');
-            btn.classList.toggle('active', showPoiEta);
-            draw();
+function togglePoiEta() {
+    showPoiEta = !showPoiEta;
+    const btn = document.getElementById('poiEtaBtn');
+    btn.classList.toggle('active', showPoiEta);
+    draw();
+}
+
+function toggleFormationMode() {
+    showFormationMode = !showFormationMode;
+    const btn = document.getElementById('formationBtn');
+    btn.classList.toggle('active', showFormationMode);
+
+    // Sync with Backend
+    fetch('/api/command', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            action: 'set_formation',
+            value: showFormationMode
+        })
+    }).catch(e => console.error("Sync Failed", e));
+
+    draw();
+}
+
+function toggleLegend() { /* ... existing ... */ }
+function toggleSettings() {
+    const panel = document.getElementById('settingsPanel');
+    panel.style.display = (panel.style.display === 'none') ? 'block' : 'none';
+}
+
+// --- Speed Override Logic ---
+let etaOverrideSpeed = null; // Kmh
+let speedPanelTimer = null;
+
+function toggleSpeedPanel() {
+    const panel = document.getElementById('speedPanel');
+    const isHidden = (panel.style.display === 'none' || panel.style.display === '');
+
+    if (isHidden) {
+        panel.style.display = 'block';
+
+        // Fix Bottom Positioning for Dragging:
+        // Convert CSS 'bottom' to explicit 'top' pixel value
+        const rect = panel.getBoundingClientRect();
+        panel.style.top = rect.top + 'px';
+        panel.style.left = rect.left + 'px';
+        panel.style.bottom = 'auto';
+        panel.style.right = 'auto';
+
+        // Initialize draggable
+        makeDraggable(panel);
+        // Init input
+        document.getElementById('speedInput').value = etaOverrideSpeed || "";
+
+        // Start Timer
+        resetSpeedPanelTimer();
+    } else {
+        panel.style.display = 'none';
+        if (speedPanelTimer) clearTimeout(speedPanelTimer);
+    }
+}
+
+function resetSpeedPanelTimer() {
+    if (speedPanelTimer) clearTimeout(speedPanelTimer);
+    speedPanelTimer = setTimeout(() => {
+        const panel = document.getElementById('speedPanel');
+        panel.style.display = 'none';
+    }, 10000); // 10 seconds
+}
+
+function makeDraggable(elmnt) {
+    let pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
+    const header = document.getElementById(elmnt.id + "Header");
+    if (header) {
+        header.onmousedown = dragMouseDown;
+        header.ontouchstart = dragMouseDown;
+    }
+
+    function dragMouseDown(e) {
+        e = e || window.event;
+        // e.preventDefault(); // Don't prevent input focus? Wait, this is header.
+        // allow default touch behavior? No, we want to drag.
+
+        // Get mouse pos at startup
+        if (e.type === 'touchstart') {
+            // e.preventDefault(); // Allow scrolling if needed? No, drag.
+            pos3 = e.touches[0].clientX;
+            pos4 = e.touches[0].clientY;
+        } else {
+            e.preventDefault();
+            pos3 = e.clientX;
+            pos4 = e.clientY;
         }
 
-        function toggleFormationMode() {
-            showFormationMode = !showFormationMode;
-            const btn = document.getElementById('formationBtn');
-            btn.classList.toggle('active', showFormationMode);
+        document.onmouseup = closeDragElement;
+        document.onmousemove = elementDrag;
+        document.ontouchend = closeDragElement;
+        document.ontouchmove = elementDrag;
+    }
 
-            // Sync with Backend
-            fetch('/api/command', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    action: 'set_formation',
-                    value: showFormationMode
-                })
-            }).catch(e => console.error("Sync Failed", e));
+    function elementDrag(e) {
+        e = e || window.event;
+        e.preventDefault();
 
-            draw();
+        let clientX, clientY;
+        if (e.type === 'touchmove') {
+            clientX = e.touches[0].clientX;
+            clientY = e.touches[0].clientY;
+        } else {
+            clientX = e.clientX;
+            clientY = e.clientY;
         }
 
-        function toggleLegend() { /* ... existing ... */ }
-        function toggleSettings() {
-            const panel = document.getElementById('settingsPanel');
-            panel.style.display = (panel.style.display === 'none') ? 'block' : 'none';
+        pos1 = pos3 - clientX;
+        pos2 = pos4 - clientY;
+        pos3 = clientX;
+        pos4 = clientY;
+
+        elmnt.style.top = (elmnt.offsetTop - pos2) + "px";
+        elmnt.style.left = (elmnt.offsetLeft - pos1) + "px";
+    }
+
+    function closeDragElement() {
+        document.onmouseup = null;
+        document.onmousemove = null;
+        document.ontouchend = null;
+        document.ontouchmove = null;
+    }
+}
+
+function appendSpeedKey(key) {
+    const input = document.getElementById('speedInput');
+    input.value = input.value + key;
+}
+
+function clearSpeedInput() {
+    document.getElementById('speedInput').value = "";
+}
+
+function backspaceSpeed() {
+    const input = document.getElementById('speedInput');
+    input.value = input.value.slice(0, -1);
+}
+
+function applySpeedOverride() {
+    const val = parseFloat(document.getElementById('speedInput').value);
+    if (!isNaN(val) && val > 0) {
+        etaOverrideSpeed = val;
+        toggleSpeedPanel(); // Close on set
+        draw();
+    } else {
+        alert("Please enter a valid speed");
+    }
+}
+
+function clearSpeedOverride() {
+    etaOverrideSpeed = null;
+    document.getElementById('speedInput').value = "";
+    toggleSpeedPanel();
+    draw();
+}
+
+// ... [Inside draw() -> POI loop at line 2161 ...] 
+// We will inject the logic there via a separate call or replace the block.
+// Wait, replace_file_content replaces a block. I need to replace the TOOLBAR and JS TOGGLES first.
+// I will split this into two calls or try to do it here if possible.
+// I replaced the toolbar block above.
+// I replaced the State Init block above.
+// I added the togglePoiEta function above.
+// But I CANNOT inject multiple discontinuous blocks.
+// The above replacement block covers lines ~197 to ~250.
+// I should stick to that scope.
+// I will do the POI Rendering Logic in a separate call.
+
+
+// Configuration (will be updated from API)
+let mapMin = [-1, -1];
+let mapMax = [1, 1];
+let targetMapMin = [-1, -1];
+let targetMapMax = [1, 1];
+let gridSteps = [200.0, 200.0]; // [x, y] steps from API
+let gridZero = [0.0, 0.0];  // [x, y] zero point from API
+
+const REFERENCE_MAP_SIZE = 2048.0; // Fixed logical resolution for coordinate consistency
+let dpr = window.devicePixelRatio || 1;
+
+// Viewport State (Absolute Screen Space)
+let viewScale = 1.0;
+let viewOffsetX = 0;
+let viewOffsetY = 0;
+let isAutoFollow = true; // Snap back to full tactical map
+let userMarkerScale = parseFloat(localStorage.getItem('userMarkerScale')) || 1.0;
+let baselineScale = 1.0; // Baseline for constant visual scaling
+
+// Grid Zero Debug Box (default OFF unless debug_mode is on)
+let showGridZero = false; // Will be set by config
+
+// Compass Rose State
+let showCompassRose = localStorage.getItem('showCompassRose') === 'true';
+
+function toggleCompassRose() {
+    showCompassRose = !showCompassRose;
+    localStorage.setItem('showCompassRose', showCompassRose);
+    updateCompassBtn();
+    draw();
+}
+
+function updateCompassBtn() {
+    const btn = document.getElementById('compassRoseBtn');
+    if (showCompassRose) {
+        btn.classList.add('active');
+    } else {
+        btn.classList.remove('active');
+    }
+}
+// Init button state
+updateCompassBtn();
+
+// Convoy Info State
+let showConvoyInfo = false;
+const convoyPanel = document.getElementById('convoyInfoPanel');
+const convoyBtn = document.getElementById('convoyInfoBtn');
+
+function toggleConvoyInfo() {
+    showConvoyInfo = !showConvoyInfo;
+    // No localStorage persistence requested, but consistent UI checks:
+    if (showConvoyInfo) {
+        convoyPanel.style.display = 'block';
+        convoyBtn.classList.add('active');
+    } else {
+        convoyPanel.style.display = 'none';
+        convoyBtn.classList.remove('active');
+    }
+}
+
+// Legend State
+let showLegend = true;
+let legendTimer = setTimeout(() => { showLegend = false; draw(); }, 45000); // Auto-hide after 45s
+
+function toggleLegend() {
+    showLegend = !showLegend;
+    if (showLegend) {
+        // Reset timer if shown again
+        clearTimeout(legendTimer);
+        legendTimer = setTimeout(() => { showLegend = false; draw(); }, 45000);
+    }
+    draw();
+}
+
+// Settings Logic
+function toggleSettings() {
+    const panel = document.getElementById('settingsPanel');
+    panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+}
+
+function updateMarkerScale(val) {
+    userMarkerScale = parseFloat(val);
+    document.getElementById('markerSizeVal').innerText = userMarkerScale.toFixed(1);
+    localStorage.setItem('userMarkerScale', userMarkerScale);
+    draw();
+}
+
+function toggleGridZero(checked) {
+    showGridZero = checked;
+    localStorage.setItem('showGridZero', showGridZero);
+    draw();
+}
+
+// Distance Unit
+let userDistUnit = localStorage.getItem('userDistUnit') || 'km';
+// Note: Ideally we check lastData.config too, but localStorage is good primarily for now. 
+
+function updateDistUnit(val) {
+    userDistUnit = val;
+    localStorage.setItem('userDistUnit', userDistUnit);
+    draw();
+}
+
+// Init Settings UI
+document.getElementById('markerSizeInput').value = userMarkerScale;
+document.getElementById('markerSizeVal').innerText = userMarkerScale.toFixed(1);
+
+// Init Dist Unit Radio
+const distRadios = document.getElementsByName('distUnit');
+for (let r of distRadios) {
+    if (r.value === userDistUnit) r.checked = true;
+}
+
+// Grid Zero checkbox - default from localStorage or OFF
+const savedGridZero = localStorage.getItem('showGridZero');
+if (savedGridZero !== null) {
+    showGridZero = savedGridZero === 'true';
+}
+document.getElementById('showGridZeroCheckbox').checked = showGridZero;
+
+// --- Planning Mode Logic ---
+let isPlanningMode = false;
+let planningWaypoints = []; // {x, y} (Normalized 0-1)
+
+function togglePlanningMode() {
+    isPlanningMode = !isPlanningMode;
+    const btn = document.getElementById('planningBtn');
+    const controls = document.getElementById('planningControls');
+
+    if (isPlanningMode) {
+        btn.classList.add('active');
+        controls.style.display = 'flex';
+        canvas.style.cursor = 'crosshair';
+    } else {
+        btn.classList.remove('active');
+        controls.style.display = 'none';
+        canvas.style.cursor = 'default';
+
+        // Force disable POI mode if active
+        if (isPlacingPoi) togglePoiMode();
+    }
+    draw();
+}
+
+function undoWaypoint() {
+    if (planningWaypoints.length > 0) {
+        planningWaypoints.pop();
+        draw();
+        sendWaypoints();
+    }
+}
+
+function clearWaypoints() {
+    planningWaypoints = [];
+    draw();
+    sendWaypoints();
+}
+
+function sendWaypoints() {
+    fetch('/api/command', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            type: 'planning_update',
+            waypoints: planningWaypoints
+        })
+    }).catch(e => console.error("Sync Error:", e));
+}
+
+// Touch Interaction State
+const pointers = new Map();
+const pointerStart = new Map(); // Track start pos for tap detection
+let initialPinchDistance = 0;
+let initialZoom = 1;
+let initialOffsetX = 0;
+let initialOffsetY = 0;
+let lastMidpointX = 0;
+let lastMidpointY = 0;
+
+function fitToScreen() {
+    // Remove early return to allow blank map init
+
+    const refW = REFERENCE_MAP_SIZE;
+    const refH = REFERENCE_MAP_SIZE;
+
+    const mapAspect = refW / refH;
+    const canvasAspect = window.innerWidth / window.innerHeight;
+
+    // Apply 5% padding
+    const pad = 0.95;
+    const availW = window.innerWidth * pad;
+    const availH = window.innerHeight * pad;
+
+    if (availW / availH > mapAspect) {
+        viewScale = availH / refH;
+    } else {
+        viewScale = availW / refW;
+    }
+
+    viewOffsetX = (window.innerWidth - refW * viewScale) / 2;
+    viewOffsetY = (window.innerHeight - refH * viewScale) / 2;
+    isAutoFollow = true;
+    baselineScale = viewScale; // Set baseline for constant scaling
+    document.getElementById('resetView').style.display = 'none';
+}
+
+function resize() {
+    dpr = window.devicePixelRatio || 1;
+    canvas.width = window.innerWidth * dpr;
+    canvas.height = window.innerHeight * dpr;
+    canvas.style.width = window.innerWidth + 'px';
+    canvas.style.height = window.innerHeight + 'px';
+    if (isAutoFollow) fitToScreen();
+    draw();
+}
+window.addEventListener('resize', resize);
+
+function setStandby() {
+    mapLoaded = false;
+    statusEl.innerText = "Link 18 STANDBY";
+    statusEl.style.color = "#FFA500"; // Orange color for standby
+    draw();
+}
+
+// Load Map Image
+async function loadMap() {
+    try {
+        const response = await fetch('/proxy/map.img?t=' + Date.now());
+        if (response.status === 404) {
+            setStandby();
+            return;
+        }
+        if (!response.ok) {
+            throw new Error(`Map load failed: ${response.status}`);
         }
 
-        // --- Speed Override Logic ---
-        let etaOverrideSpeed = null; // Kmh
-        let speedPanelTimer = null;
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
 
-        function toggleSpeedPanel() {
-            const panel = document.getElementById('speedPanel');
-            const isHidden = (panel.style.display === 'none' || panel.style.display === '');
-
-            if (isHidden) {
-                panel.style.display = 'block';
-
-                // Fix Bottom Positioning for Dragging:
-                // Convert CSS 'bottom' to explicit 'top' pixel value
-                const rect = panel.getBoundingClientRect();
-                panel.style.top = rect.top + 'px';
-                panel.style.left = rect.left + 'px';
-                panel.style.bottom = 'auto';
-                panel.style.right = 'auto';
-
-                // Initialize draggable
-                makeDraggable(panel);
-                // Init input
-                document.getElementById('speedInput').value = etaOverrideSpeed || "";
-
-                // Start Timer
-                resetSpeedPanelTimer();
-            } else {
-                panel.style.display = 'none';
-                if (speedPanelTimer) clearTimeout(speedPanelTimer);
+        const img = new Image();
+        img.onload = () => {
+            // Accept any square map (removed 2048 minimum requirement)
+            // War Thunder can generate maps of varying sizes
+            if (img.width !== img.height) {
+                console.log(`Map rejected: Non-square (${img.width}x${img.height})`);
+                setStandby();
+                URL.revokeObjectURL(url);
+                return;
             }
-        }
-
-        function resetSpeedPanelTimer() {
-            if (speedPanelTimer) clearTimeout(speedPanelTimer);
-            speedPanelTimer = setTimeout(() => {
-                const panel = document.getElementById('speedPanel');
-                panel.style.display = 'none';
-            }, 10000); // 10 seconds
-        }
-
-        function makeDraggable(elmnt) {
-            let pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
-            const header = document.getElementById(elmnt.id + "Header");
-            if (header) {
-                header.onmousedown = dragMouseDown;
-                header.ontouchstart = dragMouseDown;
+            if (img.width < 100) { // Only reject tiny/broken images
+                console.log(`Map rejected: Too small (${img.width}px)`);
+                setStandby();
+                URL.revokeObjectURL(url);
+                return;
             }
 
-            function dragMouseDown(e) {
-                e = e || window.event;
-                // e.preventDefault(); // Don't prevent input focus? Wait, this is header.
-                // allow default touch behavior? No, we want to drag.
+            // Target resolution (2048px)
+            const TARGET_SIZE = 2048;
 
-                // Get mouse pos at startup
-                if (e.type === 'touchstart') {
-                    // e.preventDefault(); // Allow scrolling if needed? No, drag.
-                    pos3 = e.touches[0].clientX;
-                    pos4 = e.touches[0].clientY;
-                } else {
-                    e.preventDefault();
-                    pos3 = e.clientX;
-                    pos4 = e.clientY;
-                }
+            // If map is smaller than target, upscale it
+            if (img.width < TARGET_SIZE) {
+                console.log(`Map upscaling: ${img.width}px -> ${TARGET_SIZE}px`);
 
-                document.onmouseup = closeDragElement;
-                document.onmousemove = elementDrag;
-                document.ontouchend = closeDragElement;
-                document.ontouchmove = elementDrag;
-            }
+                // Create offscreen canvas for high-quality upscaling
+                const upscaleCanvas = document.createElement('canvas');
+                upscaleCanvas.width = TARGET_SIZE;
+                upscaleCanvas.height = TARGET_SIZE;
+                const upscaleCtx = upscaleCanvas.getContext('2d');
 
-            function elementDrag(e) {
-                e = e || window.event;
-                e.preventDefault();
+                // Enable high quality scaling
+                upscaleCtx.imageSmoothingEnabled = true;
+                upscaleCtx.imageSmoothingQuality = 'high';
 
-                let clientX, clientY;
-                if (e.type === 'touchmove') {
-                    clientX = e.touches[0].clientX;
-                    clientY = e.touches[0].clientY;
-                } else {
-                    clientX = e.clientX;
-                    clientY = e.clientY;
-                }
+                // Draw scaled image
+                upscaleCtx.drawImage(img, 0, 0, TARGET_SIZE, TARGET_SIZE);
 
-                pos1 = pos3 - clientX;
-                pos2 = pos4 - clientY;
-                pos3 = clientX;
-                pos4 = clientY;
-
-                elmnt.style.top = (elmnt.offsetTop - pos2) + "px";
-                elmnt.style.left = (elmnt.offsetLeft - pos1) + "px";
-            }
-
-            function closeDragElement() {
-                document.onmouseup = null;
-                document.onmousemove = null;
-                document.ontouchend = null;
-                document.ontouchmove = null;
-            }
-        }
-
-        function appendSpeedKey(key) {
-            const input = document.getElementById('speedInput');
-            input.value = input.value + key;
-        }
-
-        function clearSpeedInput() {
-            document.getElementById('speedInput').value = "";
-        }
-
-        function backspaceSpeed() {
-            const input = document.getElementById('speedInput');
-            input.value = input.value.slice(0, -1);
-        }
-
-        function applySpeedOverride() {
-            const val = parseFloat(document.getElementById('speedInput').value);
-            if (!isNaN(val) && val > 0) {
-                etaOverrideSpeed = val;
-                toggleSpeedPanel(); // Close on set
-                draw();
-            } else {
-                alert("Please enter a valid speed");
-            }
-        }
-
-        function clearSpeedOverride() {
-            etaOverrideSpeed = null;
-            document.getElementById('speedInput').value = "";
-            toggleSpeedPanel();
-            draw();
-        }
-
-        // ... [Inside draw() -> POI loop at line 2161 ...] 
-        // We will inject the logic there via a separate call or replace the block.
-        // Wait, replace_file_content replaces a block. I need to replace the TOOLBAR and JS TOGGLES first.
-        // I will split this into two calls or try to do it here if possible.
-        // I replaced the toolbar block above.
-        // I replaced the State Init block above.
-        // I added the togglePoiEta function above.
-        // But I CANNOT inject multiple discontinuous blocks.
-        // The above replacement block covers lines ~197 to ~250.
-        // I should stick to that scope.
-        // I will do the POI Rendering Logic in a separate call.
-
-
-        // Configuration (will be updated from API)
-        let mapMin = [-1, -1];
-        let mapMax = [1, 1];
-        let targetMapMin = [-1, -1];
-        let targetMapMax = [1, 1];
-        let gridSteps = [200.0, 200.0]; // [x, y] steps from API
-        let gridZero = [0.0, 0.0];  // [x, y] zero point from API
-
-        const REFERENCE_MAP_SIZE = 2048.0; // Fixed logical resolution for coordinate consistency
-        let dpr = window.devicePixelRatio || 1;
-
-        // Viewport State (Absolute Screen Space)
-        let viewScale = 1.0;
-        let viewOffsetX = 0;
-        let viewOffsetY = 0;
-        let isAutoFollow = true; // Snap back to full tactical map
-        let userMarkerScale = parseFloat(localStorage.getItem('userMarkerScale')) || 1.0;
-        let baselineScale = 1.0; // Baseline for constant visual scaling
-
-        // Grid Zero Debug Box (default OFF unless debug_mode is on)
-        let showGridZero = false; // Will be set by config
-
-        // Compass Rose State
-        let showCompassRose = localStorage.getItem('showCompassRose') === 'true';
-
-        function toggleCompassRose() {
-            showCompassRose = !showCompassRose;
-            localStorage.setItem('showCompassRose', showCompassRose);
-            updateCompassBtn();
-            draw();
-        }
-
-        function updateCompassBtn() {
-            const btn = document.getElementById('compassRoseBtn');
-            if (showCompassRose) {
-                btn.classList.add('active');
-            } else {
-                btn.classList.remove('active');
-            }
-        }
-        // Init button state
-        updateCompassBtn();
-
-        // Convoy Info State
-        let showConvoyInfo = false;
-        const convoyPanel = document.getElementById('convoyInfoPanel');
-        const convoyBtn = document.getElementById('convoyInfoBtn');
-
-        function toggleConvoyInfo() {
-            showConvoyInfo = !showConvoyInfo;
-            // No localStorage persistence requested, but consistent UI checks:
-            if (showConvoyInfo) {
-                convoyPanel.style.display = 'block';
-                convoyBtn.classList.add('active');
-            } else {
-                convoyPanel.style.display = 'none';
-                convoyBtn.classList.remove('active');
-            }
-        }
-
-        // Legend State
-        let showLegend = true;
-        let legendTimer = setTimeout(() => { showLegend = false; draw(); }, 45000); // Auto-hide after 45s
-
-        function toggleLegend() {
-            showLegend = !showLegend;
-            if (showLegend) {
-                // Reset timer if shown again
-                clearTimeout(legendTimer);
-                legendTimer = setTimeout(() => { showLegend = false; draw(); }, 45000);
-            }
-            draw();
-        }
-
-        // Settings Logic
-        function toggleSettings() {
-            const panel = document.getElementById('settingsPanel');
-            panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
-        }
-
-        function updateMarkerScale(val) {
-            userMarkerScale = parseFloat(val);
-            document.getElementById('markerSizeVal').innerText = userMarkerScale.toFixed(1);
-            localStorage.setItem('userMarkerScale', userMarkerScale);
-            draw();
-        }
-
-        function toggleGridZero(checked) {
-            showGridZero = checked;
-            localStorage.setItem('showGridZero', showGridZero);
-            draw();
-        }
-
-        // Distance Unit
-        let userDistUnit = localStorage.getItem('userDistUnit') || 'km';
-        // Note: Ideally we check lastData.config too, but localStorage is good primarily for now. 
-
-        function updateDistUnit(val) {
-            userDistUnit = val;
-            localStorage.setItem('userDistUnit', userDistUnit);
-            draw();
-        }
-
-        // Init Settings UI
-        document.getElementById('markerSizeInput').value = userMarkerScale;
-        document.getElementById('markerSizeVal').innerText = userMarkerScale.toFixed(1);
-
-        // Init Dist Unit Radio
-        const distRadios = document.getElementsByName('distUnit');
-        for (let r of distRadios) {
-            if (r.value === userDistUnit) r.checked = true;
-        }
-
-        // Grid Zero checkbox - default from localStorage or OFF
-        const savedGridZero = localStorage.getItem('showGridZero');
-        if (savedGridZero !== null) {
-            showGridZero = savedGridZero === 'true';
-        }
-        document.getElementById('showGridZeroCheckbox').checked = showGridZero;
-
-        // --- Planning Mode Logic ---
-        let isPlanningMode = false;
-        let planningWaypoints = []; // {x, y} (Normalized 0-1)
-
-        function togglePlanningMode() {
-            isPlanningMode = !isPlanningMode;
-            const btn = document.getElementById('planningBtn');
-            const controls = document.getElementById('planningControls');
-
-            if (isPlanningMode) {
-                btn.classList.add('active');
-                controls.style.display = 'flex';
-                canvas.style.cursor = 'crosshair';
-            } else {
-                btn.classList.remove('active');
-                controls.style.display = 'none';
-                canvas.style.cursor = 'default';
-
-                // Force disable POI mode if active
-                if (isPlacingPoi) togglePoiMode();
-            }
-            draw();
-        }
-
-        function undoWaypoint() {
-            if (planningWaypoints.length > 0) {
-                planningWaypoints.pop();
-                draw();
-                sendWaypoints();
-            }
-        }
-
-        function clearWaypoints() {
-            planningWaypoints = [];
-            draw();
-            sendWaypoints();
-        }
-
-        function sendWaypoints() {
-            fetch('/api/command', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    type: 'planning_update',
-                    waypoints: planningWaypoints
-                })
-            }).catch(e => console.error("Sync Error:", e));
-        }
-
-        // Touch Interaction State
-        const pointers = new Map();
-        const pointerStart = new Map(); // Track start pos for tap detection
-        let initialPinchDistance = 0;
-        let initialZoom = 1;
-        let initialOffsetX = 0;
-        let initialOffsetY = 0;
-        let lastMidpointX = 0;
-        let lastMidpointY = 0;
-
-        function fitToScreen() {
-            // Remove early return to allow blank map init
-
-            const refW = REFERENCE_MAP_SIZE;
-            const refH = REFERENCE_MAP_SIZE;
-
-            const mapAspect = refW / refH;
-            const canvasAspect = window.innerWidth / window.innerHeight;
-
-            // Apply 5% padding
-            const pad = 0.95;
-            const availW = window.innerWidth * pad;
-            const availH = window.innerHeight * pad;
-
-            if (availW / availH > mapAspect) {
-                viewScale = availH / refH;
-            } else {
-                viewScale = availW / refW;
-            }
-
-            viewOffsetX = (window.innerWidth - refW * viewScale) / 2;
-            viewOffsetY = (window.innerHeight - refH * viewScale) / 2;
-            isAutoFollow = true;
-            baselineScale = viewScale; // Set baseline for constant scaling
-            document.getElementById('resetView').style.display = 'none';
-        }
-
-        function resize() {
-            dpr = window.devicePixelRatio || 1;
-            canvas.width = window.innerWidth * dpr;
-            canvas.height = window.innerHeight * dpr;
-            canvas.style.width = window.innerWidth + 'px';
-            canvas.style.height = window.innerHeight + 'px';
-            if (isAutoFollow) fitToScreen();
-            draw();
-        }
-        window.addEventListener('resize', resize);
-
-        function setStandby() {
-            mapLoaded = false;
-            statusEl.innerText = "Link 18 STANDBY";
-            statusEl.style.color = "#FFA500"; // Orange color for standby
-            draw();
-        }
-
-        // Load Map Image
-        async function loadMap() {
-            try {
-                const response = await fetch('/proxy/map.img?t=' + Date.now());
-                if (response.status === 404) {
-                    setStandby();
-                    return;
-                }
-                if (!response.ok) {
-                    throw new Error(`Map load failed: ${response.status}`);
-                }
-
-                const blob = await response.blob();
-                const url = URL.createObjectURL(blob);
-
-                const img = new Image();
-                img.onload = () => {
-                    // Accept any square map (removed 2048 minimum requirement)
-                    // War Thunder can generate maps of varying sizes
-                    if (img.width !== img.height) {
-                        console.log(`Map rejected: Non-square (${img.width}x${img.height})`);
-                        setStandby();
-                        URL.revokeObjectURL(url);
-                        return;
-                    }
-                    if (img.width < 100) { // Only reject tiny/broken images
-                        console.log(`Map rejected: Too small (${img.width}px)`);
-                        setStandby();
-                        URL.revokeObjectURL(url);
-                        return;
-                    }
-
-                    // Target resolution (2048px)
-                    const TARGET_SIZE = 2048;
-
-                    // If map is smaller than target, upscale it
-                    if (img.width < TARGET_SIZE) {
-                        console.log(`Map upscaling: ${img.width}px -> ${TARGET_SIZE}px`);
-
-                        // Create offscreen canvas for high-quality upscaling
-                        const upscaleCanvas = document.createElement('canvas');
-                        upscaleCanvas.width = TARGET_SIZE;
-                        upscaleCanvas.height = TARGET_SIZE;
-                        const upscaleCtx = upscaleCanvas.getContext('2d');
-
-                        // Enable high quality scaling
-                        upscaleCtx.imageSmoothingEnabled = true;
-                        upscaleCtx.imageSmoothingQuality = 'high';
-
-                        // Draw scaled image
-                        upscaleCtx.drawImage(img, 0, 0, TARGET_SIZE, TARGET_SIZE);
-
-                        // Create new image from upscaled canvas
-                        const upscaledImg = new Image();
-                        upscaledImg.onload = () => {
-                            mapImage = upscaledImg;
-                            mapLoaded = true;
-                            console.log(`Map loaded (upscaled): ${upscaledImg.width}x${upscaledImg.height}px`);
-                            statusEl.innerText = "Link 18 ONLINE";
-                            statusEl.style.color = "#00FF00";
-                            if (isAutoFollow) fitToScreen();
-                            draw();
-                            URL.revokeObjectURL(url); // Clean up original
-                        };
-                        upscaledImg.src = upscaleCanvas.toDataURL('image/png');
-                        return;
-                    }
-
-                    mapImage = img;
+                // Create new image from upscaled canvas
+                const upscaledImg = new Image();
+                upscaledImg.onload = () => {
+                    mapImage = upscaledImg;
                     mapLoaded = true;
-                    console.log(`Map loaded: ${img.width}x${img.height}px`);
+                    console.log(`Map loaded (upscaled): ${upscaledImg.width}x${upscaledImg.height}px`);
                     statusEl.innerText = "Link 18 ONLINE";
                     statusEl.style.color = "#00FF00";
                     if (isAutoFollow) fitToScreen();
                     draw();
-                    // Clean up memory after image loads (optional, but good practice if not needed)
-                    // URL.revokeObjectURL(url); // Keep it around if img uses it? img uses it.
+                    URL.revokeObjectURL(url); // Clean up original
                 };
-                img.onerror = () => {
-                    setStandby();
-                    URL.revokeObjectURL(url);
-                };
-                img.src = url;
-            } catch (e) {
-                // If network fails entirely (e.g. 502 Bad Gateway from proxy)
-                console.log("Map not available (Standby):", e.message);
-                setStandby();
+                upscaledImg.src = upscaleCanvas.toDataURL('image/png');
+                return;
             }
-        }
 
-        let failCount = 0;
-        let lastServerTime = 0;
-        let isFetching = false;
-
-        // Polling Data (Recursive setTimeout instead of setInterval to prevent race conditions)
-        async function fetchData() {
-            if (isFetching) return;
-            isFetching = true;
-
-            try {
-                const response = await fetch('/api/data');
-                if (response.ok) {
-                    lastData = await response.json();
-                    failCount = 0; // Reset counter on success
-
-                    // Update version label if provided in config
-                    if (lastData.config && lastData.config.version) {
-                        const vLabel = document.getElementById('versionLabel');
-                        if (vLabel) vLabel.innerText = "Link18 " + lastData.config.version;
-                    }
-
-                    // DEBUG: Log first update to see data structure
-                    if (!window.debugLogged) {
-                        console.log('Dashboard Data:', lastData);
-                        console.log('Players:', lastData.players);
-                        console.log('Airfields:', lastData.airfields);
-                        console.log('POIs:', lastData.pois);
-                        window.debugLogged = true;
-                    }
-
-                    // Update status if we have data
-                    // Update status if we have data
-                    if (lastData.status && lastData.status.text) {
-                        // Show Server Status Override
-                        statusEl.innerText = lastData.status.text;
-                        statusEl.style.color = lastData.status.color || "#00FF00";
-                    } else if (statusEl.innerText !== "Link18: Active") {
-                        statusEl.innerText = "Link18: Active";
-                        statusEl.style.color = "#00FF00";
-                    }
-
-                    // MONOTONICITY CHECK: Fix Jitter
-                    // If we receive an older packet than what we have rendered, discard it.
-                    if (lastData.server_time && lastData.server_time < lastServerTime) {
-                        console.warn("Dropped stale packet", lastData.server_time, lastServerTime);
-                        return;
-                    }
-                    lastServerTime = lastData.server_time;
-                }
-
-                if (lastData.map_info) {
-                    // Smoothly interpolate bounds to prevent jitter
-                    const mMin = lastData.map_info.map_min;
-                    const mMax = lastData.map_info.map_max;
-
-                    if (mMin && mMax) {
-                        targetMapMin = mMin;
-                        targetMapMax = mMax;
-
-                        if (lastData.map_info.grid_steps) gridSteps = lastData.map_info.grid_steps;
-
-                        // FLIPPED Y Logic
-                        // "current grid zero is on bottom left should be top left"
-                        // Flipping Y coordinate: NewY = MinY + MaxY - RawY
-                        if (lastData.map_info.grid_zero) {
-                            const rawGz = lastData.map_info.grid_zero;
-                            gridZero = [
-                                rawGz[0],
-                                targetMapMin[1] + targetMapMax[1] - rawGz[1]
-                            ];
-                        } else {
-                            gridZero = null;
-                        }
-
-                        // AUTO FOCUS: Move View to Grid (One Time) 
-                        // "DISPLAY FULL MAP, BUT move the default view to the offset"
-                        if (gridZero && lastData.map_info.grid_size) {
-                            // Apply Config Offsets (Manual Calibration)
-                            const offX = lastData.map_info.grid_offset_x || 0;
-                            const offY = lastData.map_info.grid_offset_y || 0;
-                        } // End GridZero Check
-
-                        // DEBUG: Overlay removed per user request
-                        // To re-enable debug overlay, uncomment the block below
-                        /*
-                        const dbg = document.getElementById('debugOverlay');
-                        if (dbg) {
-                            dbg.style.display = 'block';
-                            const gzDisp = gridZero ? `[${gridZero[0].toFixed(1)}, ${gridZero[1].toFixed(1)}]` : "NULL";
-                            const rawDisp = lastData.map_info.grid_zero ? `[${lastData.map_info.grid_zero[0].toFixed(1)}, ${lastData.map_info.grid_zero[1].toFixed(1)}]` : "NULL";
-                            const szDisp = lastData.map_info.grid_size ? `[${lastData.map_info.grid_size[0].toFixed(1)}, ${lastData.map_info.grid_size[1].toFixed(1)}]` : "NULL";
-                            dbg.innerText = `DEBUG VALUES...`;
-                        }
-                        */
-
-                        // Apply Config Offsets (Manual Calibration)
-                        const offX = lastData.map_info.grid_offset_x || 0;
-                        const offY = lastData.map_info.grid_offset_y || 0;
-
-                        // Adjust Grid Zero (Move Grid Origin)
-                        // "the offset in in metres convert" imply input is Pixels, convert to Meters?
-                        // Let's assume user wants to shift grid by Pixels relative to the 2048px map image.
-                        // Map Width in Meters = (targetMapMax[0] - targetMapMin[0])
-                        // Map Width in Pixels = 2048 (Reference)
-                        // MetersPerPixel = MapWidthMeters / 2048
-
-                        const worldW = targetMapMax[0] - targetMapMin[0];
-                        const worldH = targetMapMax[1] - targetMapMin[1];
-
-                        // Guard against zero width
-                        if (worldW > 1) {
-                            const metersPerPx = worldW / 2048.0;
-
-                            // Apply Pixel Offsets converted to Meters
-                            // Apply Config Offsets (Manual Calibration)
-                            const offX = lastData.map_info.grid_offset_x || 0;
-                            const offY = lastData.map_info.grid_offset_y || 0;
-
-                            if (gridZero) {
-                                // If the user inputs Meters directly in config, we just sub/add.
-                                gridZero[0] += offX;
-                                gridZero[1] += offY;
-                            }
-
-                            const gz = gridZero;
-                            const gs = lastData.map_info.grid_size;
-
-                            // AUTO-FOCUS DISABLED per user request (restore default view)
-                            // The view now uses standard fitToScreen() instead of focusing on grid area
-                            /*
-                            if (gridZero && lastData.map_info.grid_size) {
-                                if (!window.hasFocusedGrid) {
-                                    // ... autofocus logic ...
-                                    window.hasFocusedGrid = true;
-                                }
-                            }
-                            */
-                        }
-                    }
-                    updateTimer(lastData.timer);
-                    updatePlayerList(lastData.players);
-
-                    // Update Respawn Timers
-                    const timersContainer = document.getElementById('respawnTimers');
-                    if (timersContainer) {
-                        if (lastData.respawn_timers && lastData.respawn_timers.length > 0) {
-                            timersContainer.style.display = 'block';
-                            let timerHtml = "";
-                            const now = Date.now() / 1000;
-                            lastData.respawn_timers.forEach(timer => {
-                                const remaining = Math.max(0, timer.end_time - now);
-                                if (remaining > 0) {
-                                    const m = Math.floor(remaining / 60);
-                                    const s = Math.floor(remaining % 60);
-                                    const timeStr = `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
-                                    // Make label bold and yellow, time white
-                                    timerHtml += `<div><span style="color: #FFCC00; font-weight: bold;">${timer.label}:</span> ${timeStr}</div>`;
-                                }
-                            });
-                            timersContainer.innerHTML = timerHtml;
-                        } else {
-                            timersContainer.style.display = 'none';
-                        }
-                    }
-
-                    // Immediate map bounds update (No animation)
-                    mapMin = [...targetMapMin];
-                    mapMax = [...targetMapMax];
-
-                    draw();
-                } else {
-                    throw new Error("Response not OK");
-                }
-            } catch (e) {
-                failCount++;
-                if (failCount > 5) { // ~1 second of failures
-                    statusEl.innerText = "Connection Lost";
-                    statusEl.style.color = "red";
-                }
-            } finally {
-                isFetching = false;
-                setTimeout(fetchData, 33); // Schedule next fetch (approx 30Hz)
-            }
-        }
-
-
-        const resetBtn = document.getElementById('resetView');
-        resetBtn.addEventListener('click', () => {
-            fitToScreen();
+            mapImage = img;
+            mapLoaded = true;
+            console.log(`Map loaded: ${img.width}x${img.height}px`);
+            statusEl.innerText = "Link 18 ONLINE";
+            statusEl.style.color = "#00FF00";
+            if (isAutoFollow) fitToScreen();
             draw();
-        });
-
-        // --- Coordinate Systems (North-Up) ---
-        // --- Coordinate Systems (North-Up) ---
-        const Transformer = {
-            screenToWorld: function (sx, sy) {
-                const refW = REFERENCE_MAP_SIZE;
-                const refH = REFERENCE_MAP_SIZE;
-                if (refW === 0 || refH === 0 || viewScale === 0) return [0, 0];
-
-                const nx = (sx - viewOffsetX) / (refW * viewScale);
-                const ny = (sy - viewOffsetY) / (refH * viewScale);
-
-                const wW = targetMapMax[0] - targetMapMin[0];
-                const wH = targetMapMax[1] - targetMapMin[1];
-
-                // Y-Down Logic (Matches Local)
-                const wx = targetMapMin[0] + nx * wW;
-                const wy = targetMapMin[1] + ny * wH;
-
-                return [wx, wy];
-            },
-            worldToScreen: function (wx, wy) {
-                const wW = targetMapMax[0] - targetMapMin[0];
-                const wH = targetMapMax[1] - targetMapMin[1];
-                if (wW === 0 || wH === 0) return [0, 0];
-
-                // Y-Down Logic (Matches Local)
-                const nx = (wx - targetMapMin[0]) / wW;
-                const ny = (wy - targetMapMin[1]) / wH;
-
-                const refW = REFERENCE_MAP_SIZE;
-                const refH = REFERENCE_MAP_SIZE;
-                const sx = viewOffsetX + nx * refW * viewScale;
-                const sy = viewOffsetY + ny * refH * viewScale;
-
-                return [sx, sy];
-            }
+            // Clean up memory after image loads (optional, but good practice if not needed)
+            // URL.revokeObjectURL(url); // Keep it around if img uses it? img uses it.
         };
+        img.onerror = () => {
+            setStandby();
+            URL.revokeObjectURL(url);
+        };
+        img.src = url;
+    } catch (e) {
+        // If network fails entirely (e.g. 502 Bad Gateway from proxy)
+        console.log("Map not available (Standby):", e.message);
+        setStandby();
+    }
+}
 
-        // Aliases for compatibility if other code uses them (e.g. legacy drawing)
-        const screenToWorld = Transformer.screenToWorld;
-        const worldToScreen = Transformer.worldToScreen;
+let failCount = 0;
+let lastServerTime = 0;
+let isFetching = false;
 
-        // --- Commander Mode Logic ---
-        let isCommanderMode = false;
-        let isPenActive = false;
-        let currentStroke = null;
+// Polling Data (Recursive setTimeout instead of setInterval to prevent race conditions)
+async function fetchData() {
+    if (isFetching) return;
+    isFetching = true;
 
-        function toggleCommanderMode() {
-            isCommanderMode = !isCommanderMode;
-            const btn = document.getElementById('commanderBtn');
-            const tools = document.getElementById('commanderTools');
+    try {
+        const response = await fetch('/api/data');
+        if (response.ok) {
+            lastData = await response.json();
+            failCount = 0; // Reset counter on success
 
-            if (btn) btn.classList.toggle('active', isCommanderMode);
-            if (tools) tools.style.display = isCommanderMode ? 'flex' : 'none';
-
-            if (!isCommanderMode) {
-                isPenActive = false;
-                const penBtn = document.getElementById('penToolBtn');
-                if (penBtn) penBtn.classList.remove('active');
+            // Update version label if provided in config
+            if (lastData.config && lastData.config.version) {
+                const vLabel = document.getElementById('versionLabel');
+                if (vLabel) vLabel.innerText = "Link18 " + lastData.config.version;
             }
+
+            // DEBUG: Log first update to see data structure
+            if (!window.debugLogged) {
+                console.log('Dashboard Data:', lastData);
+                console.log('Players:', lastData.players);
+                console.log('Airfields:', lastData.airfields);
+                console.log('POIs:', lastData.pois);
+                window.debugLogged = true;
+            }
+
+            // Update status if we have data
+            // Update status if we have data
+            if (lastData.status && lastData.status.text) {
+                // Show Server Status Override
+                statusEl.innerText = lastData.status.text;
+                statusEl.style.color = lastData.status.color || "#00FF00";
+            } else if (statusEl.innerText !== "Link18: Active") {
+                statusEl.innerText = "Link18: Active";
+                statusEl.style.color = "#00FF00";
+            }
+
+            // MONOTONICITY CHECK: Fix Jitter
+            // If we receive an older packet than what we have rendered, discard it.
+            if (lastData.server_time && lastData.server_time < lastServerTime) {
+                console.warn("Dropped stale packet", lastData.server_time, lastServerTime);
+                return;
+            }
+            lastServerTime = lastData.server_time;
+        }
+
+        if (lastData.map_info) {
+            // Smoothly interpolate bounds to prevent jitter
+            const mMin = lastData.map_info.map_min;
+            const mMax = lastData.map_info.map_max;
+
+            if (mMin && mMax) {
+                targetMapMin = mMin;
+                targetMapMax = mMax;
+
+                if (lastData.map_info.grid_steps) gridSteps = lastData.map_info.grid_steps;
+
+                // FLIPPED Y Logic
+                // "current grid zero is on bottom left should be top left"
+                // Flipping Y coordinate: NewY = MinY + MaxY - RawY
+                if (lastData.map_info.grid_zero) {
+                    const rawGz = lastData.map_info.grid_zero;
+                    gridZero = [
+                        rawGz[0],
+                        targetMapMin[1] + targetMapMax[1] - rawGz[1]
+                    ];
+                } else {
+                    gridZero = null;
+                }
+
+                // AUTO FOCUS: Move View to Grid (One Time) 
+                // "DISPLAY FULL MAP, BUT move the default view to the offset"
+                if (gridZero && lastData.map_info.grid_size) {
+                    // Apply Config Offsets (Manual Calibration)
+                    const offX = lastData.map_info.grid_offset_x || 0;
+                    const offY = lastData.map_info.grid_offset_y || 0;
+                } // End GridZero Check
+
+                // DEBUG: Overlay removed per user request
+                // To re-enable debug overlay, uncomment the block below
+                /*
+                const dbg = document.getElementById('debugOverlay');
+                if (dbg) {
+                    dbg.style.display = 'block';
+                    const gzDisp = gridZero ? `[${gridZero[0].toFixed(1)}, ${gridZero[1].toFixed(1)}]` : "NULL";
+                    const rawDisp = lastData.map_info.grid_zero ? `[${lastData.map_info.grid_zero[0].toFixed(1)}, ${lastData.map_info.grid_zero[1].toFixed(1)}]` : "NULL";
+                    const szDisp = lastData.map_info.grid_size ? `[${lastData.map_info.grid_size[0].toFixed(1)}, ${lastData.map_info.grid_size[1].toFixed(1)}]` : "NULL";
+                    dbg.innerText = `DEBUG VALUES...`;
+                }
+                */
+
+                // Apply Config Offsets (Manual Calibration)
+                const offX = lastData.map_info.grid_offset_x || 0;
+                const offY = lastData.map_info.grid_offset_y || 0;
+
+                // Adjust Grid Zero (Move Grid Origin)
+                // "the offset in in metres convert" imply input is Pixels, convert to Meters?
+                // Let's assume user wants to shift grid by Pixels relative to the 2048px map image.
+                // Map Width in Meters = (targetMapMax[0] - targetMapMin[0])
+                // Map Width in Pixels = 2048 (Reference)
+                // MetersPerPixel = MapWidthMeters / 2048
+
+                const worldW = targetMapMax[0] - targetMapMin[0];
+                const worldH = targetMapMax[1] - targetMapMin[1];
+
+                // Guard against zero width
+                if (worldW > 1) {
+                    const metersPerPx = worldW / 2048.0;
+
+                    // Apply Pixel Offsets converted to Meters
+                    // Apply Config Offsets (Manual Calibration)
+                    const offX = lastData.map_info.grid_offset_x || 0;
+                    const offY = lastData.map_info.grid_offset_y || 0;
+
+                    if (gridZero) {
+                        // If the user inputs Meters directly in config, we just sub/add.
+                        gridZero[0] += offX;
+                        gridZero[1] += offY;
+                    }
+
+                    const gz = gridZero;
+                    const gs = lastData.map_info.grid_size;
+
+                    // AUTO-FOCUS DISABLED per user request (restore default view)
+                    // The view now uses standard fitToScreen() instead of focusing on grid area
+                    /*
+                    if (gridZero && lastData.map_info.grid_size) {
+                        if (!window.hasFocusedGrid) {
+                            // ... autofocus logic ...
+                            window.hasFocusedGrid = true;
+                        }
+                    }
+                    */
+                }
+            }
+            updateTimer(lastData.timer);
+            updatePlayerList(lastData.players);
+
+            // Update Respawn Timers
+            const timersContainer = document.getElementById('respawnTimers');
+            if (timersContainer) {
+                if (lastData.respawn_timers && lastData.respawn_timers.length > 0) {
+                    timersContainer.style.display = 'block';
+                    let timerHtml = "";
+                    const now = Date.now() / 1000;
+                    lastData.respawn_timers.forEach(timer => {
+                        const remaining = Math.max(0, timer.end_time - now);
+                        if (remaining > 0) {
+                            const m = Math.floor(remaining / 60);
+                            const s = Math.floor(remaining % 60);
+                            const timeStr = `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+                            // Make label bold and yellow, time white
+                            timerHtml += `<div><span style="color: #FFCC00; font-weight: bold;">${timer.label}:</span> ${timeStr}</div>`;
+                        }
+                    });
+                    timersContainer.innerHTML = timerHtml;
+                } else {
+                    timersContainer.style.display = 'none';
+                }
+            }
+
+            // Update Active Commander UI
+            const cmdDisplay = document.getElementById('activeCommanderDisplay');
+            if (cmdDisplay) {
+                if (lastData.commander && lastData.commander.active_commander) {
+                    cmdDisplay.innerText = "Commander: " + lastData.commander.active_commander;
+                    cmdDisplay.style.display = 'block';
+                } else {
+                    cmdDisplay.style.display = 'none';
+                }
+            }
+
+            // Immediate map bounds update (No animation)
+            mapMin = [...targetMapMin];
+            mapMax = [...targetMapMax];
+
             draw();
+        } else {
+            throw new Error("Response not OK");
         }
-
-        function togglePenTool() {
-            isPenActive = !isPenActive;
-            const btn = document.getElementById('penToolBtn');
-            if (btn) btn.classList.toggle('active', isPenActive);
+    } catch (e) {
+        failCount++;
+        if (failCount > 5) { // ~1 second of failures
+            statusEl.innerText = "Connection Lost";
+            statusEl.style.color = "red";
         }
+    } finally {
+        isFetching = false;
+        setTimeout(fetchData, 33); // Schedule next fetch (approx 30Hz)
+    }
+}
 
-        function clearDrawings() {
-            if (true) { // Confirmation removed
-                apiCommand({ type: 'cmd_drawing_clear' });
+const resetBtn = document.getElementById('resetView');
+resetBtn.addEventListener('click', () => {
+    fitToScreen();
+    draw();
+});
+
+// --- Coordinate Systems (North-Up) ---
+// --- Coordinate Systems (North-Up) ---
+const Transformer = {
+    screenToWorld: function (sx, sy) {
+        const refW = REFERENCE_MAP_SIZE;
+        const refH = REFERENCE_MAP_SIZE;
+        if (refW === 0 || refH === 0 || viewScale === 0) return [0, 0];
+
+        const nx = (sx - viewOffsetX) / (refW * viewScale);
+        const ny = (sy - viewOffsetY) / (refH * viewScale);
+
+        const wW = targetMapMax[0] - targetMapMin[0];
+        const wH = targetMapMax[1] - targetMapMin[1];
+
+        // Y-Down Logic (Matches Local)
+        const wx = targetMapMin[0] + nx * wW;
+        const wy = targetMapMin[1] + ny * wH;
+
+        return [wx, wy];
+    },
+    worldToScreen: function (wx, wy) {
+        const wW = targetMapMax[0] - targetMapMin[0];
+        const wH = targetMapMax[1] - targetMapMin[1];
+        if (wW === 0 || wH === 0) return [0, 0];
+
+        // Y-Down Logic (Matches Local)
+        const nx = (wx - targetMapMin[0]) / wW;
+        const ny = (wy - targetMapMin[1]) / wH;
+
+        const refW = REFERENCE_MAP_SIZE;
+        const refH = REFERENCE_MAP_SIZE;
+        const sx = viewOffsetX + nx * refW * viewScale;
+        const sy = viewOffsetY + ny * refH * viewScale;
+
+        return [sx, sy];
+    }
+};
+
+// Aliases for compatibility if other code uses them (e.g. legacy drawing)
+const screenToWorld = Transformer.screenToWorld;
+const worldToScreen = Transformer.worldToScreen;
+
+// --- Commander Mode Logic ---
+let isCommanderMode = false;
+let isPenActive = false;
+let isPlacingFighter = false;
+let isPlacingPoi = false;
+let currentStroke = null;
+let draggingMarkerId = null;
+
+function toggleCommanderMode() {
+    isCommanderMode = !isCommanderMode;
+    const btn = document.getElementById('commanderBtn');
+    const tools = document.getElementById('commanderTools');
+
+    // Find my callsign
+    let myCallsign = 'Unknown';
+    if (lastData && lastData.players && lastData.players['_local']) {
+        myCallsign = lastData.players['_local'].callsign || 'Unknown';
+    } else if (lastData && lastData.config && lastData.config.callsign) {
+        myCallsign = lastData.config.callsign;
+    }
+
+    if (btn) btn.classList.toggle('active', isCommanderMode);
+    if (tools) tools.style.display = isCommanderMode ? 'flex' : 'none';
+
+    if (isCommanderMode) {
+        apiCommand({ type: 'claim_commander', callsign: myCallsign });
+        if (statusEl) statusEl.innerText = "Commander Mode Active";
+    } else {
+        apiCommand({ type: 'release_commander', callsign: myCallsign });
+        isPenActive = false;
+        const penBtn = document.getElementById('penToolBtn');
+        if (penBtn) penBtn.classList.remove('active');
+
+        isPlacingFighter = false;
+        const fighterBtn = document.getElementById('fighterBtn');
+        if (fighterBtn) fighterBtn.classList.remove('active');
+
+        canvas.style.cursor = 'default';
+        statusEl.innerText = "Link18: Active";
+    }
+    draw();
+}
+
+function togglePenTool() {
+    isPenActive = !isPenActive;
+    const btn = document.getElementById('penToolBtn');
+    if (btn) btn.classList.toggle('active', isPenActive);
+
+    // Disable other tools
+    if (isPenActive && isPlacingFighter) toggleFighterMode();
+}
+
+function toggleFighterMode() {
+    isPlacingFighter = !isPlacingFighter;
+    const btn = document.getElementById('fighterBtn');
+
+    if (isPlacingFighter) {
+        btn.classList.add('active');
+        canvas.style.cursor = 'crosshair';
+        statusEl.innerText = "Click Map to Place Fighter";
+
+        // Disable other tools
+        if (isPenActive) togglePenTool();
+    } else {
+        btn.classList.remove('active');
+        canvas.style.cursor = 'default';
+        statusEl.innerText = "Link18: Active";
+    }
+}
+
+async function createFighter(clientX, clientY) {
+    const rect = canvas.getBoundingClientRect();
+    const sx = clientX - rect.left;
+    const sy = clientY - rect.top;
+
+    const [wx, wy] = Transformer.screenToWorld(sx, sy);
+    if (!Number.isFinite(wx)) return;
+
+    try {
+        await fetch('/api/command', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                type: 'place_marker',
+                marker_type: 'fighter',
+                x: wx,
+                y: wy
+            })
+        });
+        // Reset Mode after placement
+        toggleFighterMode();
+    } catch (e) {
+        console.error("Fighter Create Failed", e);
+        alert("Failed to create Fighter");
+    }
+}
+
+function clearDrawings() {
+    if (true) { // Confirmation removed
+        apiCommand({ type: 'cmd_drawing_clear' });
+    }
+}
+
+function apiCommand(data) {
+    fetch('/api/command', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+    }).catch(e => console.error(e));
+}
+
+
+
+// Removed HTML5 Drag & Drop listeners as they are replaced by Click-to-Place logic
+// Old Drop Logic Removed
+// canvas.addEventListener('dragover'... deleted
+// canvas.addEventListener('drop'... deleted
+
+// --- Standard Pointer Events (Pen & Dragging Existing) ---
+// Spliced into handlePointerUp / pointermove / pointerdown
+// See updated listeners below.
+
+canvas.addEventListener('pointerdown', e => {
+    // Prevent default to stop mouse emulation on touch
+    // BUT careful: might block scrolling if not handled. 
+    // We want to block scrolling ONLY if interacting with map tools.
+    // Actually, we set touch-action: none in CSS, so browser shouldn't scroll anyway.
+    // Adding preventDefault() here is safe for "app-like" behavior.
+    e.preventDefault();
+
+
+
+    // --- Commander Drawing (High Priority) ---
+    if (isCommanderMode) {
+        const rect = canvas.getBoundingClientRect();
+        const sx = (e.clientX - rect.left);
+        const sy = (e.clientY - rect.top);
+
+        if (isPenActive) {
+            // Map Screen -> World
+            const [wx, wy] = Transformer.screenToWorld(sx, sy);
+
+            if (Number.isFinite(wx)) {
+                // Find my player unit's color
+                let playerColor = '#FFFF00'; // Default yellow
+                if (lastData && lastData.players) {
+                    // Safe search in case players is an object map instead of an array
+                    const playersArray = Array.isArray(lastData.players) ? lastData.players : Object.values(lastData.players);
+                    const myPlayer = playersArray.find(p => p.is_me);
+                    if (myPlayer && myPlayer.color) {
+                        playerColor = myPlayer.color;
+                    }
+                } else if (lastData && lastData.config && lastData.config.color) {
+                    playerColor = lastData.config.color;
+                }
+
+                currentStroke = {
+                    id: 'd_' + Date.now(),
+                    points: [[wx, wy]],
+                    color: playerColor
+                };
+
+                if (canvas.setPointerCapture) canvas.setPointerCapture(e.pointerId);
+                e.preventDefault();
+                return;
             }
-        }
-
-        function apiCommand(data) {
-            fetch('/api/command', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(data)
-            }).catch(e => console.error(e));
-        }
-
-
-
-        // Removed HTML5 Drag & Drop listeners as they are replaced by Click-to-Place logic
-        // Old Drop Logic Removed
-        // canvas.addEventListener('dragover'... deleted
-        // canvas.addEventListener('drop'... deleted
-
-        // --- Standard Pointer Events (Pen & Dragging Existing) ---
-        // Spliced into handlePointerUp / pointermove / pointerdown
-        // See updated listeners below.
-
-        canvas.addEventListener('pointerdown', e => {
-            // Prevent default to stop mouse emulation on touch
-            // BUT careful: might block scrolling if not handled. 
-            // We want to block scrolling ONLY if interacting with map tools.
-            // Actually, we set touch-action: none in CSS, so browser shouldn't scroll anyway.
-            // Adding preventDefault() here is safe for "app-like" behavior.
-            e.preventDefault();
-
-
-
-            // --- Commander Drawing (High Priority) ---
-            if (isCommanderMode && isPenActive) {
-                // Map Screen -> World
-                const rect = canvas.getBoundingClientRect();
-                const scaleX = canvas.width / rect.width;
-                const scaleY = canvas.height / rect.height;
-                const sx = (e.clientX - rect.left); // Fixed: No scaling
-                const sy = (e.clientY - rect.top); // Fixed: No scaling
-
-                const [wx, wy] = Transformer.screenToWorld(sx, sy);
-
-                if (Number.isFinite(wx)) {
-                    currentStroke = {
-                        id: 'd_' + Date.now(),
-                        points: [[wx, wy]],
-                        color: lastData?.config?.color || '#FFFF00'
-                    };
-
+        } else if (!isPlacingFighter && lastData && lastData.commander && lastData.commander.markers) {
+            // Check Marker Drag
+            const tapDistSq = 900; // 30px hit radius
+            for (let i = lastData.commander.markers.length - 1; i >= 0; i--) {
+                const m = lastData.commander.markers[i];
+                const [msx, msy] = Transformer.worldToScreen(m.x, m.y);
+                const dx = sx - msx;
+                const dy = sy - msy;
+                if (dx * dx + dy * dy < tapDistSq) {
+                    draggingMarkerId = m.id;
                     if (canvas.setPointerCapture) canvas.setPointerCapture(e.pointerId);
                     e.preventDefault();
                     return;
                 }
             }
+        }
+    }
 
-            // Normal Pan/Zoom
-            pointers.set(e.pointerId, e);
-            pointerStart.set(e.pointerId, { x: e.clientX, y: e.clientY, time: Date.now() });
-            if (pointers.size === 1) {
-                lastMidpointX = e.clientX;
-                lastMidpointY = e.clientY;
-            } else if (pointers.size === 2) {
-                const pts = Array.from(pointers.values());
-                initialPinchDistance = Math.hypot(pts[0].clientX - pts[1].clientX, pts[0].clientY - pts[1].clientY);
-                initialZoom = viewScale;
-                initialOffsetX = viewOffsetX;
-                initialOffsetY = viewOffsetY;
-                lastMidpointX = (pts[0].clientX + pts[1].clientX) / 2;
-                lastMidpointY = (pts[0].clientY + pts[1].clientY) / 2;
+    // Normal Pan/Zoom
+    pointers.set(e.pointerId, e);
+    pointerStart.set(e.pointerId, { x: e.clientX, y: e.clientY, time: Date.now() });
+    if (pointers.size === 1) {
+        lastMidpointX = e.clientX;
+        lastMidpointY = e.clientY;
+    } else if (pointers.size === 2) {
+        const pts = Array.from(pointers.values());
+        initialPinchDistance = Math.hypot(pts[0].clientX - pts[1].clientX, pts[0].clientY - pts[1].clientY);
+        initialZoom = viewScale;
+        initialOffsetX = viewOffsetX;
+        initialOffsetY = viewOffsetY;
+        lastMidpointX = (pts[0].clientX + pts[1].clientX) / 2;
+        lastMidpointY = (pts[0].clientY + pts[1].clientY) / 2;
+    }
+});
+
+canvas.addEventListener('pointermove', e => {
+
+
+
+    if (isCommanderMode && draggingMarkerId) {
+        const rect = canvas.getBoundingClientRect();
+        const sx = e.clientX - rect.left;
+        const sy = e.clientY - rect.top;
+        const [wx, wy] = Transformer.screenToWorld(sx, sy);
+        if (Number.isFinite(wx)) {
+            const m = lastData.commander.markers.find(m => m.id === draggingMarkerId);
+            if (m) {
+                m.x = wx;
+                m.y = wy;
+                draw();
             }
-        });
+        }
+        e.preventDefault();
+        return;
+    }
 
-        canvas.addEventListener('pointermove', e => {
+    if (isCommanderMode && isPenActive && currentStroke) {
+        if (e.buttons === 0) {
+            // Mouse up outside?
+            finishStroke();
+            return;
+        }
 
+        const rect = canvas.getBoundingClientRect();
+        const sx = (e.clientX - rect.left);
+        const sy = (e.clientY - rect.top);
 
-
-            if (isCommanderMode && isPenActive && currentStroke) {
-                if (e.buttons === 0) {
-                    // Mouse up outside?
-                    finishStroke();
-                    return;
-                }
-
-                const rect = canvas.getBoundingClientRect();
-                const scaleX = canvas.width / rect.width;
-                const scaleY = canvas.height / rect.height;
-                const sx = (e.clientX - rect.left); // Fixed: No scaling
-                const sy = (e.clientY - rect.top); // Fixed: No scaling
-
-                const [wx, wy] = Transformer.screenToWorld(sx, sy);
-                if (Number.isFinite(wx)) {
-                    currentStroke.points.push([wx, wy]);
-                    draw();
-                }
-                e.preventDefault();
-                return;
-            }
-
-            if (!pointers.has(e.pointerId)) return;
-            pointers.set(e.pointerId, e);
-
-            if (pointers.size === 1) {
-                // Drag to Pan
-                // In Planning Mode, suppress pan if movement is small (Tap attempt)
-                if (isPlanningMode) {
-                    const start = pointerStart.get(e.pointerId);
-                    if (start) {
-                        const distFromStart = Math.hypot(e.clientX - start.x, e.clientY - start.y);
-                        if (distFromStart < 15) return; // Ignore small movements (presumed tap)
-                    }
-                }
-
-                const sensitivity = 0.8;
-                const dx = (e.clientX - lastMidpointX) * sensitivity;
-                const dy = (e.clientY - lastMidpointY) * sensitivity;
-
-                if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) {
-                    isAutoFollow = false;
-                    resetBtn.style.display = 'inline-block';
-                    viewOffsetX += dx;
-                    viewOffsetY += dy;
-                }
-                lastMidpointX = e.clientX;
-                lastMidpointY = e.clientY;
-            } else if (pointers.size === 2) {
-                const pts = Array.from(pointers.values());
-                const currentDist = Math.hypot(pts[0].clientX - pts[1].clientX, pts[0].clientY - pts[1].clientY);
-                const midpointX = (pts[0].clientX + pts[1].clientX) / 2;
-                const midpointY = (pts[0].clientY + pts[1].clientY) / 2;
-
-                if (initialPinchDistance > 0) {
-                    isAutoFollow = false;
-                    resetBtn.style.display = 'inline-block';
-
-                    const newScale = initialZoom * (currentDist / initialPinchDistance);
-                    const clampedScale = Math.max(0.05, Math.min(newScale, 50));
-
-                    const ds = clampedScale / viewScale;
-                    viewOffsetX = midpointX - (midpointX - viewOffsetX) * ds;
-                    viewOffsetY = midpointY - (midpointY - viewOffsetY) * ds;
-                    viewScale = clampedScale;
-
-                    const mdx = midpointX - lastMidpointX;
-                    const mdy = midpointY - lastMidpointY;
-                    viewOffsetX += mdx;
-                    viewOffsetY += mdy;
-                }
-                lastMidpointX = midpointX;
-                lastMidpointY = midpointY;
-            }
+        const [wx, wy] = Transformer.screenToWorld(sx, sy);
+        if (Number.isFinite(wx)) {
+            currentStroke.points.push([wx, wy]);
             draw();
-        });
+        }
+        e.preventDefault();
+        return;
+    }
 
-        function handlePointerUp(e) {
+    if (!pointers.has(e.pointerId)) return;
+    pointers.set(e.pointerId, e);
 
-            if (isCommanderMode && currentStroke) {
-                // Finalize Stroke
-                apiCommand({
-                    type: 'cmd_drawing_add',
-                    data: currentStroke // {id, points, color}
-                });
-
-                try {
-                    canvas.releasePointerCapture(e.pointerId);
-                } catch (err) { /* ignore */ }
-
-                currentStroke = null;
-                drawingPointerId = null;
-                pointers.delete(e.pointerId);
-                return;
-            }
-
-            if (isCommanderMode && draggingMarkerId) {
-                // Finalize Drag
-                // Find current pos from data (we updated it in move)
-                const m = lastData.commander.markers.find(m => m.id === draggingMarkerId);
-                if (m) {
-                    apiCommand({
-                        type: 'cmd_marker_update',
-                        data: m
-                    });
-                }
-                draggingMarkerId = null;
-                pointers.delete(e.pointerId);
-                return;
-            }
-
-            // Tap Detection for Planning Mode
-
+    if (pointers.size === 1) {
+        // Drag to Pan
+        // In Planning Mode, suppress pan if movement is small (Tap attempt)
+        if (isPlanningMode) {
             const start = pointerStart.get(e.pointerId);
-            if (start && (isPlanningMode || isPlacingPoi)) {
-                const dx = e.clientX - start.x;
-                const dy = e.clientY - start.y;
-                const dist = Math.hypot(dx, dy);
-                if (dist < 10) { // Threshold for tap
-                    if (isPlacingPoi) {
-                        createSharedPoi(e.clientX, e.clientY);
-                    } else if (isPlanningMode) {
-                        addScreenWaypoint(e.clientX, e.clientY);
-                    }
-                }
-            }
-            pointerStart.delete(e.pointerId);
-
-            pointers.delete(e.pointerId);
-            if (pointers.size < 2) initialPinchDistance = 0;
-            if (pointers.size === 1) {
-                const p = Array.from(pointers.values())[0];
-                lastMidpointX = p.clientX;
-                lastMidpointY = p.clientY;
+            if (start) {
+                const distFromStart = Math.hypot(e.clientX - start.x, e.clientY - start.y);
+                if (distFromStart < 15) return; // Ignore small movements (presumed tap)
             }
         }
 
-        function addScreenWaypoint(sx, sy) {
-            const refW = REFERENCE_MAP_SIZE;
-            const refH = REFERENCE_MAP_SIZE;
+        const sensitivity = 0.8;
+        const dx = (e.clientX - lastMidpointX) * sensitivity;
+        const dy = (e.clientY - lastMidpointY) * sensitivity;
 
-            // Inverse of: sx = viewOffsetX + nx * (refW * viewScale)
-            // nx = (sx - viewOffsetX) / (refW * viewScale)
-
-            const nx = (sx - viewOffsetX) / (refW * viewScale);
-            const ny = (sy - viewOffsetY) / (refH * viewScale);
-
-            planningWaypoints.push({ x: nx, y: ny });
-            draw();
-            sendWaypoints();
-        }
-
-        // Attach to windown to catch lifts outside canvas
-        window.addEventListener('pointerup', handlePointerUp);
-        window.addEventListener('pointercancel', handlePointerUp);
-        // canvas.addEventListener('pointerleave', handlePointerUp); // Leave is bad if we have capture
-
-        // --- POI Placement Logic ---
-        let isPlacingPoi = false;
-
-        function togglePoiMode() {
-            isPlacingPoi = !isPlacingPoi;
-            const btn = document.getElementById('poiBtn');
-
-            if (isPlacingPoi) {
-                // Do NOT disable Planning Mode (we are inside it)
-
-                btn.classList.add('active');
-                canvas.style.cursor = 'crosshair';
-                statusEl.innerText = "Click Map to Place POI";
-            } else {
-                btn.classList.remove('active');
-                // Revert cursor/status based on Planning Mode
-                if (isPlanningMode) {
-                    canvas.style.cursor = 'crosshair';
-                    statusEl.innerText = "Link18: Active";
-                } else {
-                    canvas.style.cursor = 'default';
-                    statusEl.innerText = "Link18: Active";
-                }
-            }
-        }
-
-        async function createSharedPoi(sx, sy) {
-            const refW = REFERENCE_MAP_SIZE;
-            const refH = REFERENCE_MAP_SIZE;
-
-            const nx = (sx - viewOffsetX) / (refW * viewScale);
-            const ny = (sy - viewOffsetY) / (refH * viewScale);
-
-            // No Prompt - Instant Placement
-            const label = "Mark";
-
-            // Send to Backend
-            try {
-                await fetch('/api/command', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        action: 'create_poi',
-                        x: nx,
-                        y: ny,
-                        label: label || "Target"
-                    })
-                });
-                // Reset Mode
-                togglePoiMode();
-            } catch (e) {
-                console.error("POI Create Failed", e);
-                alert("Failed to create POI");
-            }
-        }
-
-        // Hook into PointerUp for POI placement (using existing handlePointerUp or separate?)
-        // handlePointerUp handles TAP detection. We can splice it there.
-        // modified handlePointerUp below:
-
-        // Mouse Wheel Zoom
-        canvas.addEventListener('wheel', e => {
-            e.preventDefault();
-            const zoomFactor = e.deltaY < 0 ? 1.1 : 0.9;
-            const mouseX = e.clientX;
-            const mouseY = e.clientY;
-
-            const oldScale = viewScale;
-            const newScale = viewScale * zoomFactor;
-
-            // Limit zoom
-            if (newScale < baselineScale * 0.2 || newScale > 20) return;
-
-            viewScale = newScale;
-            // Center zoom on mouse
-            viewOffsetX = mouseX - (mouseX - viewOffsetX) * (viewScale / oldScale);
-            viewOffsetY = mouseY - (mouseY - viewOffsetY) * (viewScale / oldScale);
-
+        if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) {
             isAutoFollow = false;
-            document.getElementById('resetView').style.display = 'inline-block';
-            draw();
-        }, { passive: false });
-
-        function updateTimer(timerData) {
-            if (!timerData || timerData.spawn_time === null) {
-                timerEl.innerText = "Pending...";
-                return;
-            }
-            let total = Math.floor(timerData.flight_time);
-            let h = Math.floor(total / 3600);
-            let m = Math.floor((total % 3600) / 60);
-            let s = total % 60;
-            timerEl.innerText = `T+${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+            resetBtn.style.display = 'inline-block';
+            viewOffsetX += dx;
+            viewOffsetY += dy;
         }
+        lastMidpointX = e.clientX;
+        lastMidpointY = e.clientY;
+    } else if (pointers.size === 2) {
+        const pts = Array.from(pointers.values());
+        const currentDist = Math.hypot(pts[0].clientX - pts[1].clientX, pts[0].clientY - pts[1].clientY);
+        const midpointX = (pts[0].clientX + pts[1].clientX) / 2;
+        const midpointY = (pts[0].clientY + pts[1].clientY) / 2;
 
-        function updatePlayerList(players) {
-            if (!players) return;
+        if (initialPinchDistance > 0) {
+            isAutoFollow = false;
+            resetBtn.style.display = 'inline-block';
 
-            // Toggle container class
-            if (showFormationMode) {
-                playerListEl.classList.add('formation-mode');
-            } else {
-                playerListEl.classList.remove('formation-mode');
+            const newScale = initialZoom * (currentDist / initialPinchDistance);
+            const clampedScale = Math.max(0.05, Math.min(newScale, 50));
+
+            const ds = clampedScale / viewScale;
+            viewOffsetX = midpointX - (midpointX - viewOffsetX) * ds;
+            viewOffsetY = midpointY - (midpointY - viewOffsetY) * ds;
+            viewScale = clampedScale;
+
+            const mdx = midpointX - lastMidpointX;
+            const mdy = midpointY - lastMidpointY;
+            viewOffsetX += mdx;
+            viewOffsetY += mdy;
+        }
+        lastMidpointX = midpointX;
+        lastMidpointY = midpointY;
+    }
+    draw();
+});
+
+function handlePointerUp(e) {
+
+    if (isCommanderMode && currentStroke) {
+        // Finalize Stroke
+        apiCommand({
+            type: 'cmd_drawing_add',
+            data: currentStroke // {id, points, color}
+        });
+
+        try {
+            canvas.releasePointerCapture(e.pointerId);
+        } catch (err) { /* ignore */ }
+
+        currentStroke = null;
+        drawingPointerId = null;
+        pointers.delete(e.pointerId);
+        return;
+    }
+
+    if (isCommanderMode && draggingMarkerId) {
+        // Finalize Drag
+        // Find current pos from data (we updated it in move)
+        const m = lastData.commander.markers.find(m => m.id === draggingMarkerId);
+        if (m) {
+            apiCommand({
+                type: 'cmd_marker_update',
+                data: m
+            });
+        }
+        draggingMarkerId = null;
+        pointers.delete(e.pointerId);
+        return;
+    }
+
+    // Tap Detection for Planning Mode
+
+    const start = pointerStart.get(e.pointerId);
+    if (start && (isPlanningMode || isPlacingPoi || isPlacingFighter)) {
+        const dx = e.clientX - start.x;
+        const dy = e.clientY - start.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist < 20) { // Threshold for tap (increased for tablet consistency)
+            if (isPlacingFighter) {
+                createFighter(e.clientX, e.clientY);
+            } else if (isPlacingPoi) {
+                createSharedPoi(e.clientX, e.clientY);
+            } else if (isPlanningMode) {
+                addScreenWaypoint(e.clientX, e.clientY);
             }
+        }
+    }
+    pointerStart.delete(e.pointerId);
 
-            const playerArray = Object.entries(players).map(([k, v]) => ({ ...v, pid: k }));
-            // Filter out self if needed, or keep self? Generally lists everyone. 
-            // Usually exclude self from "Formation" list but keep in "Player List".
-            // Let's keep everyone but highlight self?
+    pointers.delete(e.pointerId);
+    if (pointers.size < 2) initialPinchDistance = 0;
+    if (pointers.size === 1) {
+        const p = Array.from(pointers.values())[0];
+        lastMidpointX = p.clientX;
+        lastMidpointY = p.clientY;
+    }
+}
 
-            if (playerArray.length === 0) {
-                playerListEl.style.display = 'none';
-                return;
-            }
-            playerListEl.style.display = 'flex';
+canvas.addEventListener('pointerup', handlePointerUp);
+canvas.addEventListener('pointercancel', handlePointerUp);
 
-            if (showFormationMode) {
-                // FORMATION VIEW
-                // Header
-                let html = `
+function addScreenWaypoint(sx, sy) {
+    const refW = REFERENCE_MAP_SIZE;
+    const refH = REFERENCE_MAP_SIZE;
+
+    // Inverse of: sx = viewOffsetX + nx * (refW * viewScale)
+    // nx = (sx - viewOffsetX) / (refW * viewScale)
+
+    const nx = (sx - viewOffsetX) / (refW * viewScale);
+    const ny = (sy - viewOffsetY) / (refH * viewScale);
+
+    planningWaypoints.push({ x: nx, y: ny });
+    draw();
+    sendWaypoints();
+}
+
+// Attach to windown to catch lifts outside canvas
+window.addEventListener('pointerup', handlePointerUp);
+window.addEventListener('pointercancel', handlePointerUp);
+// canvas.addEventListener('pointerleave', handlePointerUp); // Leave is bad if we have capture
+
+// --- POI Placement Logic ---
+
+function togglePoiMode() {
+    isPlacingPoi = !isPlacingPoi;
+    const btn = document.getElementById('poiBtn');
+
+    if (isPlacingPoi) {
+        // Do NOT disable Planning Mode (we are inside it)
+
+        btn.classList.add('active');
+        canvas.style.cursor = 'crosshair';
+        statusEl.innerText = "Click Map to Place POI";
+    } else {
+        btn.classList.remove('active');
+        // Revert cursor/status based on Planning Mode
+        if (isPlanningMode) {
+            canvas.style.cursor = 'crosshair';
+            statusEl.innerText = "Link18: Active";
+        } else {
+            canvas.style.cursor = 'default';
+            statusEl.innerText = "Link18: Active";
+        }
+    }
+}
+
+async function createSharedPoi(sx, sy) {
+    const refW = REFERENCE_MAP_SIZE;
+    const refH = REFERENCE_MAP_SIZE;
+
+    const nx = (sx - viewOffsetX) / (refW * viewScale);
+    const ny = (sy - viewOffsetY) / (refH * viewScale);
+
+    // No Prompt - Instant Placement
+    const label = "Mark";
+
+    // Send to Backend
+    try {
+        await fetch('/api/command', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'create_poi',
+                x: nx,
+                y: ny,
+                label: label || "Target"
+            })
+        });
+        // Reset Mode
+        togglePoiMode();
+    } catch (e) {
+        console.error("POI Create Failed", e);
+        alert("Failed to create POI");
+    }
+}
+
+// Hook into PointerUp for POI placement (using existing handlePointerUp or separate?)
+// handlePointerUp handles TAP detection. We can splice it there.
+// modified handlePointerUp below:
+
+// Mouse Wheel Zoom
+canvas.addEventListener('wheel', e => {
+    e.preventDefault();
+    const zoomFactor = e.deltaY < 0 ? 1.1 : 0.9;
+    const mouseX = e.clientX;
+    const mouseY = e.clientY;
+
+    const oldScale = viewScale;
+    const newScale = viewScale * zoomFactor;
+
+    // Limit zoom
+    if (newScale < baselineScale * 0.2 || newScale > 20) return;
+
+    viewScale = newScale;
+    // Center zoom on mouse
+    viewOffsetX = mouseX - (mouseX - viewOffsetX) * (viewScale / oldScale);
+    viewOffsetY = mouseY - (mouseY - viewOffsetY) * (viewScale / oldScale);
+
+    isAutoFollow = false;
+    document.getElementById('resetView').style.display = 'inline-block';
+    draw();
+}, { passive: false });
+
+function updateTimer(timerData) {
+    if (!timerData || timerData.spawn_time === null) {
+        timerEl.innerText = "Pending...";
+        return;
+    }
+    let total = Math.floor(timerData.flight_time);
+    let h = Math.floor(total / 3600);
+    let m = Math.floor((total % 3600) / 60);
+    let s = total % 60;
+    timerEl.innerText = `T+${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+}
+
+function updatePlayerList(players) {
+    if (!players) return;
+
+    // Toggle container class
+    if (showFormationMode) {
+        playerListEl.classList.add('formation-mode');
+    } else {
+        playerListEl.classList.remove('formation-mode');
+    }
+
+    const playerArray = Object.entries(players).map(([k, v]) => ({ ...v, pid: k }));
+    // Filter out self if needed, or keep self? Generally lists everyone. 
+    // Usually exclude self from "Formation" list but keep in "Player List".
+    // Let's keep everyone but highlight self?
+
+    if (playerArray.length === 0) {
+        playerListEl.style.display = 'none';
+        return;
+    }
+    playerListEl.style.display = 'flex';
+
+    if (showFormationMode) {
+        // FORMATION VIEW
+        // Header
+        let html = `
                     <div class="player-header">
                         <span>PILOT</span>
                         <span style="text-align:left">TYPE</span>
@@ -1130,63 +1257,63 @@
                     </div>
                 `;
 
-                // Get Local Player for math
-                const localP = players['_local'];
+        // Get Local Player for math
+        const localP = players['_local'];
 
-                // Sort by distance if local exists
-                if (localP) {
-                    playerArray.sort((a, b) => {
-                        const da = (a.pid === '_local') ? 0 : Math.hypot(a.x - localP.x, a.y - localP.y);
-                        const db = (b.pid === '_local') ? 0 : Math.hypot(b.x - localP.x, b.y - localP.y);
-                        return da - db;
-                    });
+        // Sort by distance if local exists
+        if (localP) {
+            playerArray.sort((a, b) => {
+                const da = (a.pid === '_local') ? 0 : Math.hypot(a.x - localP.x, a.y - localP.y);
+                const db = (b.pid === '_local') ? 0 : Math.hypot(b.x - localP.x, b.y - localP.y);
+                return da - db;
+            });
+        }
+
+        html += playerArray.map(p => {
+            if (p.pid === '_local') return ''; // Skip self in formation list? User said "next to player list", usually implies replacing it or enriching it.
+            // Let's Skip Self for Formation View to match Overlay behavior
+
+            // Calc Data
+            let distStr = "-";
+            let hdgStr = "-";
+            let altStr = (p.alt !== undefined) ? (p.alt / 1000).toFixed(1) : "-";
+
+            // Speed Unit Logic
+            let spdVal = (p.spd !== undefined) ? p.spd : 0;
+            if (lastData && lastData.config && lastData.config.unit_is_kts) {
+                spdVal *= 0.539957;
+            }
+            let spdStr = (p.spd !== undefined) ? spdVal.toFixed(0) : "-";
+
+            if (localP) {
+                // Dist
+                let dx = p.x - localP.x;
+                let dy = p.y - localP.y;
+
+                // Scale check
+                let wW = 65000;
+                let wH = 65000;
+                if (lastData && lastData.map_info && lastData.map_info.map_max && lastData.map_info.map_min) {
+                    wW = lastData.map_info.map_max[0] - lastData.map_info.map_min[0];
+                    wH = lastData.map_info.map_max[1] - lastData.map_info.map_min[1];
                 }
 
-                html += playerArray.map(p => {
-                    if (p.pid === '_local') return ''; // Skip self in formation list? User said "next to player list", usually implies replacing it or enriching it.
-                    // Let's Skip Self for Formation View to match Overlay behavior
+                if (Math.abs(dx) < 2.0) {
+                    dx *= wW; dy *= wH;
+                }
 
-                    // Calc Data
-                    let distStr = "-";
-                    let hdgStr = "-";
-                    let altStr = (p.alt !== undefined) ? (p.alt / 1000).toFixed(1) : "-";
+                const dist = Math.hypot(dx, dy);
+                distStr = (dist < 1000) ? dist.toFixed(0) : (dist / 1000).toFixed(1);
 
-                    // Speed Unit Logic
-                    let spdVal = (p.spd !== undefined) ? p.spd : 0;
-                    if (lastData && lastData.config && lastData.config.unit_is_kts) {
-                        spdVal *= 0.539957;
-                    }
-                    let spdStr = (p.spd !== undefined) ? spdVal.toFixed(0) : "-";
+                // Hdg
+                if (Math.abs(p.dx || 0) > 0.001 || Math.abs(p.dy || 0) > 0.001) {
+                    let deg = Math.atan2(p.dy, p.dx) * 180 / Math.PI;
+                    deg = (deg + 90 + 360) % 360;
+                    hdgStr = deg.toFixed(0).padStart(3, '0');
+                }
+            }
 
-                    if (localP) {
-                        // Dist
-                        let dx = p.x - localP.x;
-                        let dy = p.y - localP.y;
-
-                        // Scale check
-                        let wW = 65000;
-                        let wH = 65000;
-                        if (lastData && lastData.map_info && lastData.map_info.map_max && lastData.map_info.map_min) {
-                            wW = lastData.map_info.map_max[0] - lastData.map_info.map_min[0];
-                            wH = lastData.map_info.map_max[1] - lastData.map_info.map_min[1];
-                        }
-
-                        if (Math.abs(dx) < 2.0) {
-                            dx *= wW; dy *= wH;
-                        }
-
-                        const dist = Math.hypot(dx, dy);
-                        distStr = (dist < 1000) ? dist.toFixed(0) : (dist / 1000).toFixed(1);
-
-                        // Hdg
-                        if (Math.abs(p.dx || 0) > 0.001 || Math.abs(p.dy || 0) > 0.001) {
-                            let deg = Math.atan2(p.dy, p.dx) * 180 / Math.PI;
-                            deg = (deg + 90 + 360) % 360;
-                            hdgStr = deg.toFixed(0).padStart(3, '0');
-                        }
-                    }
-
-                    return `
+            return `
                     <div class="player-item">
                         <div class="pid-cell" style="color: ${p.color || '#fff'}">${p.callsign || 'Unk'}</div>
                         <div class="data-cell" style="text-align:left; font-size:11px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:80px;" title="${p.vehicle || ''}">${p.vehicle || '-'}</div>
@@ -1196,310 +1323,288 @@
                         <div class="data-cell spd">${spdStr}</div>
                     </div>
                     `;
-                }).join('');
+        }).join('');
 
-                playerListEl.innerHTML = html;
+        playerListEl.innerHTML = html;
 
-            } else {
-                // STANDARD VIEW
-                playerListEl.innerHTML = playerArray.map(p => `
+    } else {
+        // STANDARD VIEW
+        playerListEl.innerHTML = playerArray.map(p => `
                     <div class="player-item">
                         <div class="player-dot" style="background: ${p.color || '#fff'}"></div>
                         <span>${p.callsign || 'Unknown'}</span>
                     </div>
                 `).join('');
+    }
+}
+
+// Drawing Logic
+function draw() {
+    ctx.save();
+    ctx.scale(dpr, dpr);
+
+    ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
+
+    // Unified Viewport Logic
+    // The viewScale and viewOffsetX/Y are ABSOLUTE screen space coordinates.
+
+    // Set high quality smoothing
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+
+    // Reference dimensions for coordinate mapping
+    const refW = REFERENCE_MAP_SIZE;
+    const refH = REFERENCE_MAP_SIZE;
+
+    // Draw Background Map
+    const mapDrawW = refW * viewScale;
+    const mapDrawH = refH * viewScale;
+
+    // Coordinate Conversion (World -> Screen)
+    let minX = -32000, minY = -32000;
+    let maxX = 32000, maxY = 32000;
+
+    if (lastData && lastData.map_info && lastData.map_info.map_min) {
+        minX = lastData.map_info.map_min[0];
+        minY = lastData.map_info.map_min[1];
+        maxX = lastData.map_info.map_max[0];
+        maxY = lastData.map_info.map_max[1];
+    }
+
+    const worldWidth = maxX - minX;
+    const worldHeight = maxY - minY;
+
+    // Unified marker scale (Constant visual size based on config & fit baseline)
+    const baseScaleFactor = (lastData && lastData.config && lastData.config.web_marker_scale) || 2.3;
+    let markerScale = baselineScale * baseScaleFactor * userMarkerScale;
+
+    if (mapLoaded) {
+        // 1. Draw Map Image
+        ctx.drawImage(mapImage, viewOffsetX, viewOffsetY, mapDrawW, mapDrawH);
+
+        // 2. Draw Capture Zones (overlay on map)
+        if (lastData && lastData.objectives) {
+            lastData.objectives.forEach(obj => {
+                if (obj.type === 'capture_zone') {
+                    const [sx, sy] = worldToScreen(obj.x, obj.y);
+
+                    ctx.save();
+                    ctx.translate(sx, sy);
+
+                    // Parse color
+                    let color = obj.color || '#FFFFFF';
+                    if (Array.isArray(color)) {
+                        color = `rgb(${color[0]}, ${color[1]}, ${color[2]})`;
+                    }
+
+                    // Blink logic
+                    if (obj.blink) {
+                        const blinkState = Math.floor(Date.now() / 500) % 2;
+                        if (blinkState === 0) color = '#FFFFFF';
+                    }
+
+                    // Draw Diamond Shape
+                    const size = 15 * markerScale;
+                    ctx.beginPath();
+                    ctx.moveTo(0, -size);
+                    ctx.lineTo(size, 0);
+                    ctx.lineTo(0, size);
+                    ctx.lineTo(-size, 0);
+                    ctx.closePath();
+
+                    // Fill with partial transparency
+                    ctx.fillStyle = color;
+                    ctx.globalAlpha = 0.85;
+                    ctx.fill();
+
+                    // Border
+                    ctx.globalAlpha = 1.0;
+                    ctx.lineWidth = 2 * markerScale;
+                    ctx.strokeStyle = '#000000';
+                    ctx.stroke();
+
+                    ctx.restore();
+                }
+            });
+        }
+
+        // 2.5 Draw Airfields - REMOVED LEGACY LOOP
+        // (Airfields are drawn in Step 4 for proper layering)
+    } else {
+        // Draw Blank Tactical Grid Background
+        ctx.fillStyle = '#1a1c20';
+        ctx.fillRect(viewOffsetX, viewOffsetY, mapDrawW, mapDrawH);
+
+        // "STANDBY" watermark
+        ctx.font = `bold ${Math.max(48, 128 * viewScale)}px Arial`;
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.05)';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText("STANDBY", viewOffsetX + mapDrawW / 2, viewOffsetY + mapDrawH / 2);
+    }
+
+    // (Planning Path moved to end of draw loop for Z-order)
+
+    // Grid Zero Debug Box (controlled by Settings toggle)
+    if (showGridZero && gridZero && targetMapMin && targetMapMax) {
+        // Calculate Grid Zero in Screen Space
+        const worldW = targetMapMax[0] - targetMapMin[0];
+        const worldH = targetMapMax[1] - targetMapMin[1];
+        const gz = gridZero;
+
+        if (worldW > 1 && worldH > 1) {
+            const nGzX = (gz[0] - targetMapMin[0]) / worldW;
+            const nGzY = (gz[1] - targetMapMin[1]) / worldH;
+
+            const sGzX = viewOffsetX + (nGzX * mapDrawW);
+            const sGzY = viewOffsetY + (nGzY * mapDrawH);
+
+            // Draw Magenta Debug Box
+            ctx.save();
+            ctx.strokeStyle = '#FF00FF'; // Magenta
+            ctx.lineWidth = 3;
+            ctx.strokeRect(sGzX - 10, sGzY - 10, 20, 20); // 20x20 box centered on GridZero
+
+            // Draw Label
+            ctx.fillStyle = '#FF00FF';
+            ctx.font = 'bold 12px Arial';
+            ctx.fillText("GRID ZERO", sGzX + 15, sGzY + 5);
+            ctx.restore();
+        }
+    }
+
+
+
+    // --- Unified Dynamic Grid Overlay ---
+    if (gridSteps && gridZero) {
+        const currentMin = mapMin;
+        const currentMax = mapMax;
+
+        ctx.strokeStyle = 'rgba(0, 0, 0, 0.2)';
+        ctx.lineWidth = Math.max(1.5, 3 * viewScale);
+        // White labels with black shadow for visibility outside border
+        ctx.fillStyle = '#FFFFFF';
+        ctx.shadowColor = '#000000';
+        ctx.shadowBlur = 3;
+        ctx.shadowOffsetX = 1;
+        ctx.shadowOffsetY = 1;
+        // Larger font to match airfield markers
+        const labelFontSize = Math.max(14, 20 * viewScale);
+        ctx.font = `bold ${labelFontSize}px Arial`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+
+        const stepX = gridSteps[0];
+        const stepY = gridSteps[1];
+        const minX = currentMin[0];
+        const maxX = currentMax[0];
+        const minY = currentMin[1];
+        const maxY = currentMax[1];
+
+        const worldW = maxX - minX;
+        const worldH = maxY - minY;
+
+        // Local transform helper for the grid loop
+        function gridToScreen(wx, wy) {
+            const nx = (wx - minX) / worldW;
+            const ny = (wy - minY) / worldH;
+            const sx = viewOffsetX + nx * mapDrawW;
+            const sy = viewOffsetY + ny * mapDrawH;
+            return [sx, sy];
+        }
+
+        // X-lines
+        // Grid starts at top-left with NO offset (removed half-step)
+        const gridOriginX = gridZero[0];
+        const gridOriginY = gridZero[1];
+
+        const kX = Math.floor((minX - gridOriginX) / stepX);
+        let startX = gridOriginX + kX * stepX;
+        let colIndex = 0; // Start at 0, will be incremented before use
+
+        for (let wx = startX; wx <= maxX + stepX; wx += stepX) {
+            // Draw grid line only if within bounds
+            if (wx <= maxX) {
+                const [sx, sy] = gridToScreen(wx, minY);
+                const [ex, ey] = gridToScreen(wx, maxY);
+
+                ctx.beginPath();
+                ctx.moveTo(sx, sy);
+                ctx.lineTo(ex, ey);
+                ctx.stroke();
+            }
+
+            // Number Labels (X-Axis) - OUTSIDE the border
+            // Label is for the cell at the current grid position
+            colIndex++;
+            const [cellCenterX, _] = gridToScreen(wx + stepX / 2, minY);
+            // Only draw if the cell is within map bounds (Relaxed check for partial cells)
+            if (wx + stepX > minX && wx + stepX / 2 <= maxX + stepX) {
+                // Above map border
+                ctx.fillText(colIndex.toString(), cellCenterX, viewOffsetY - 15);
+                // Below map border
+                ctx.fillText(colIndex.toString(), cellCenterX, viewOffsetY + mapDrawH + 15);
             }
         }
 
-        // Drawing Logic
-        function draw() {
-            ctx.save();
-            ctx.scale(dpr, dpr);
+        // Y-lines (using adjusted origin)
+        const kY = Math.floor((minY - gridOriginY) / stepY);
+        let startY = gridOriginY + kY * stepY;
+        let rowIndex = -1; // Start at -1, will be incremented before use
 
-            ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
+        for (let wy = startY; wy <= maxY + stepY; wy += stepY) {
+            // Draw grid line only if within bounds
+            if (wy <= maxY) {
+                const [sx, sy] = gridToScreen(minX, wy);
+                const [ex, ey] = gridToScreen(maxX, wy);
 
-            // Unified Viewport Logic
-            // The viewScale and viewOffsetX/Y are ABSOLUTE screen space coordinates.
-
-            // Set high quality smoothing
-            ctx.imageSmoothingEnabled = true;
-            ctx.imageSmoothingQuality = 'high';
-
-            // Reference dimensions for coordinate mapping
-            const refW = REFERENCE_MAP_SIZE;
-            const refH = REFERENCE_MAP_SIZE;
-
-            // Draw Background Map
-            const mapDrawW = refW * viewScale;
-            const mapDrawH = refH * viewScale;
-
-            // Coordinate Conversion (World -> Screen)
-            let minX = -32000, minY = -32000;
-            let maxX = 32000, maxY = 32000;
-
-            if (lastData && lastData.map_info && lastData.map_info.map_min) {
-                minX = lastData.map_info.map_min[0];
-                minY = lastData.map_info.map_min[1];
-                maxX = lastData.map_info.map_max[0];
-                maxY = lastData.map_info.map_max[1];
-            }
-
-            const worldWidth = maxX - minX;
-            const worldHeight = maxY - minY;
-
-            // Unified marker scale (Constant visual size based on config & fit baseline)
-            const baseScaleFactor = (lastData && lastData.config && lastData.config.web_marker_scale) || 2.3;
-            let markerScale = baselineScale * baseScaleFactor * userMarkerScale;
-
-            if (mapLoaded) {
-                // 1. Draw Map Image
-                ctx.drawImage(mapImage, viewOffsetX, viewOffsetY, mapDrawW, mapDrawH);
-
-                // 2. Draw Capture Zones (overlay on map)
-                if (lastData && lastData.objectives) {
-                    lastData.objectives.forEach(obj => {
-                        if (obj.type === 'capture_zone') {
-                            const [sx, sy] = worldToScreen(obj.x, obj.y);
-
-                            ctx.save();
-                            ctx.translate(sx, sy);
-
-                            // Parse color
-                            let color = obj.color || '#FFFFFF';
-                            if (Array.isArray(color)) {
-                                color = `rgb(${color[0]}, ${color[1]}, ${color[2]})`;
-                            }
-
-                            // Blink logic
-                            if (obj.blink) {
-                                const blinkState = Math.floor(Date.now() / 500) % 2;
-                                if (blinkState === 0) color = '#FFFFFF';
-                            }
-
-                            // Draw Diamond Shape
-                            const size = 15 * markerScale;
-                            ctx.beginPath();
-                            ctx.moveTo(0, -size);
-                            ctx.lineTo(size, 0);
-                            ctx.lineTo(0, size);
-                            ctx.lineTo(-size, 0);
-                            ctx.closePath();
-
-                            // Fill with partial transparency
-                            ctx.fillStyle = color;
-                            ctx.globalAlpha = 0.85;
-                            ctx.fill();
-
-                            // Border
-                            ctx.globalAlpha = 1.0;
-                            ctx.lineWidth = 2 * markerScale;
-                            ctx.strokeStyle = '#000000';
-                            ctx.stroke();
-
-                            ctx.restore();
-                        }
-                    });
-                }
-
-                // 2.5 Draw Airfields - REMOVED LEGACY LOOP
-                // (Airfields are drawn in Step 4 for proper layering)
-            } else {
-                // Draw Blank Tactical Grid Background
-                ctx.fillStyle = '#1a1c20';
-                ctx.fillRect(viewOffsetX, viewOffsetY, mapDrawW, mapDrawH);
-
-                // "STANDBY" watermark
-                ctx.font = `bold ${Math.max(48, 128 * viewScale)}px Arial`;
-                ctx.fillStyle = 'rgba(255, 255, 255, 0.05)';
-                ctx.textAlign = 'center';
-                ctx.textBaseline = 'middle';
-                ctx.fillText("STANDBY", viewOffsetX + mapDrawW / 2, viewOffsetY + mapDrawH / 2);
-            }
-
-            // (Planning Path moved to end of draw loop for Z-order)
-
-            // Grid Zero Debug Box (controlled by Settings toggle)
-            if (showGridZero && gridZero && targetMapMin && targetMapMax) {
-                // Calculate Grid Zero in Screen Space
-                const worldW = targetMapMax[0] - targetMapMin[0];
-                const worldH = targetMapMax[1] - targetMapMin[1];
-                const gz = gridZero;
-
-                if (worldW > 1 && worldH > 1) {
-                    const nGzX = (gz[0] - targetMapMin[0]) / worldW;
-                    const nGzY = (gz[1] - targetMapMin[1]) / worldH;
-
-                    const sGzX = viewOffsetX + (nGzX * mapDrawW);
-                    const sGzY = viewOffsetY + (nGzY * mapDrawH);
-
-                    // Draw Magenta Debug Box
-                    ctx.save();
-                    ctx.strokeStyle = '#FF00FF'; // Magenta
-                    ctx.lineWidth = 3;
-                    ctx.strokeRect(sGzX - 10, sGzY - 10, 20, 20); // 20x20 box centered on GridZero
-
-                    // Draw Label
-                    ctx.fillStyle = '#FF00FF';
-                    ctx.font = 'bold 12px Arial';
-                    ctx.fillText("GRID ZERO", sGzX + 15, sGzY + 5);
-                    ctx.restore();
-                }
-            }
-
-
-
-            // --- Unified Dynamic Grid Overlay ---
-            if (gridSteps && gridZero) {
-                const currentMin = mapMin;
-                const currentMax = mapMax;
-
-                ctx.strokeStyle = 'rgba(0, 0, 0, 0.2)';
-                ctx.lineWidth = Math.max(1.5, 3 * viewScale);
-                // White labels with black shadow for visibility outside border
-                ctx.fillStyle = '#FFFFFF';
-                ctx.shadowColor = '#000000';
-                ctx.shadowBlur = 3;
-                ctx.shadowOffsetX = 1;
-                ctx.shadowOffsetY = 1;
-                // Larger font to match airfield markers
-                const labelFontSize = Math.max(14, 20 * viewScale);
-                ctx.font = `bold ${labelFontSize}px Arial`;
-                ctx.textAlign = 'center';
-                ctx.textBaseline = 'middle';
-
-                const stepX = gridSteps[0];
-                const stepY = gridSteps[1];
-                const minX = currentMin[0];
-                const maxX = currentMax[0];
-                const minY = currentMin[1];
-                const maxY = currentMax[1];
-
-                const worldW = maxX - minX;
-                const worldH = maxY - minY;
-
-                // Local transform helper for the grid loop
-                function gridToScreen(wx, wy) {
-                    const nx = (wx - minX) / worldW;
-                    const ny = (wy - minY) / worldH;
-                    const sx = viewOffsetX + nx * mapDrawW;
-                    const sy = viewOffsetY + ny * mapDrawH;
-                    return [sx, sy];
-                }
-
-                // X-lines
-                // Grid starts at top-left with NO offset (removed half-step)
-                const gridOriginX = gridZero[0];
-                const gridOriginY = gridZero[1];
-
-                const kX = Math.floor((minX - gridOriginX) / stepX);
-                let startX = gridOriginX + kX * stepX;
-                let colIndex = 0; // Start at 0, will be incremented before use
-
-                for (let wx = startX; wx <= maxX + stepX; wx += stepX) {
-                    // Draw grid line only if within bounds
-                    if (wx <= maxX) {
-                        const [sx, sy] = gridToScreen(wx, minY);
-                        const [ex, ey] = gridToScreen(wx, maxY);
-
-                        ctx.beginPath();
-                        ctx.moveTo(sx, sy);
-                        ctx.lineTo(ex, ey);
-                        ctx.stroke();
-                    }
-
-                    // Number Labels (X-Axis) - OUTSIDE the border
-                    // Label is for the cell at the current grid position
-                    colIndex++;
-                    const [cellCenterX, _] = gridToScreen(wx + stepX / 2, minY);
-                    // Only draw if the cell is within map bounds (Relaxed check for partial cells)
-                    if (wx + stepX > minX && wx + stepX / 2 <= maxX + stepX) {
-                        // Above map border
-                        ctx.fillText(colIndex.toString(), cellCenterX, viewOffsetY - 15);
-                        // Below map border
-                        ctx.fillText(colIndex.toString(), cellCenterX, viewOffsetY + mapDrawH + 15);
-                    }
-                }
-
-                // Y-lines (using adjusted origin)
-                const kY = Math.floor((minY - gridOriginY) / stepY);
-                let startY = gridOriginY + kY * stepY;
-                let rowIndex = -1; // Start at -1, will be incremented before use
-
-                for (let wy = startY; wy <= maxY + stepY; wy += stepY) {
-                    // Draw grid line only if within bounds
-                    if (wy <= maxY) {
-                        const [sx, sy] = gridToScreen(minX, wy);
-                        const [ex, ey] = gridToScreen(maxX, wy);
-
-                        ctx.beginPath();
-                        ctx.moveTo(sx, sy);
-                        ctx.lineTo(ex, ey);
-                        ctx.stroke();
-                    }
-
-                    // Letter Labels (Y-Axis) - OUTSIDE the border
-                    // Label is for the cell at the current grid position
-                    rowIndex++;
-                    const [_, cellCenterY] = gridToScreen(minX, wy + stepY / 2);
-                    // Only draw if the cell is within map bounds (Relaxed check for partial cells)
-                    if (wy + stepY > minY && wy + stepY / 2 <= maxY + stepY) {
-                        const letter = String.fromCharCode(65 + rowIndex);
-                        // Left of map border
-                        ctx.textAlign = 'right';
-                        ctx.fillText(letter, viewOffsetX - 8, cellCenterY);
-                        // Right of map border
-                        ctx.textAlign = 'left';
-                        ctx.fillText(letter, viewOffsetX + mapDrawW + 8, cellCenterY);
-                        ctx.textAlign = 'center';
-                    }
-                }
-
-                // Reset shadow after grid labels
-                ctx.shadowColor = 'transparent';
-                ctx.shadowBlur = 0;
-                ctx.shadowOffsetX = 0;
-                ctx.shadowOffsetY = 0;
-            }
-
-            // --- PLANNING PATH MOVED TO END OF DRAW LOOP FOR TOP Z-ORDER ---
-
-            if (!lastData) { ctx.restore(); return; }
-
-            // --- COMMANDER MODE: DRAWINGS & MARKERS ---
-            // Render synchronized drawings
-            if (lastData.commander && lastData.commander.drawings) {
-                lastData.commander.drawings.forEach(d => {
-                    if (d.points && d.points.length > 0) {
-                        ctx.beginPath();
-                        ctx.lineWidth = 3 * viewScale; // Scale thickness
-                        ctx.strokeStyle = d.color || '#FFFF00';
-                        ctx.lineCap = 'round';
-                        ctx.lineJoin = 'round';
-
-                        let first = true;
-                        d.points.forEach(pt => {
-                            const [dsx, dsy] = Transformer.worldToScreen(pt[0], pt[1]);
-                            if (first) {
-                                ctx.moveTo(dsx, dsy);
-                                first = false;
-                            } else {
-                                ctx.lineTo(dsx, dsy);
-                            }
-                        });
-                        ctx.stroke();
-                    }
-                });
-            }
-
-            // Render local current stroke (while drawing)
-            if (isCommanderMode && currentStroke && currentStroke.points.length > 0) {
                 ctx.beginPath();
-                ctx.lineWidth = 3 * viewScale;
-                ctx.strokeStyle = currentStroke.color;
+                ctx.moveTo(sx, sy);
+                ctx.lineTo(ex, ey);
+                ctx.stroke();
+            }
+
+            // Letter Labels (Y-Axis) - OUTSIDE the border
+            // Label is for the cell at the current grid position
+            rowIndex++;
+            const [_, cellCenterY] = gridToScreen(minX, wy + stepY / 2);
+            // Only draw if the cell is within map bounds (Relaxed check for partial cells)
+            if (wy + stepY > minY && wy + stepY / 2 <= maxY + stepY) {
+                const letter = String.fromCharCode(65 + rowIndex);
+                // Left of map border
+                ctx.textAlign = 'right';
+                ctx.fillText(letter, viewOffsetX - 8, cellCenterY);
+                // Right of map border
+                ctx.textAlign = 'left';
+                ctx.fillText(letter, viewOffsetX + mapDrawW + 8, cellCenterY);
+                ctx.textAlign = 'center';
+            }
+        }
+
+        // Reset shadow after grid labels
+        ctx.shadowColor = 'transparent';
+        ctx.shadowBlur = 0;
+        ctx.shadowOffsetX = 0;
+        ctx.shadowOffsetY = 0;
+    }
+
+    // --- PLANNING PATH MOVED TO END OF DRAW LOOP FOR TOP Z-ORDER ---
+
+    if (!lastData) { ctx.restore(); return; }
+
+    // --- COMMANDER MODE: DRAWINGS & MARKERS ---
+    // Render synchronized drawings
+    if (lastData.commander && lastData.commander.drawings) {
+        lastData.commander.drawings.forEach(d => {
+            if (d.points && d.points.length > 0) {
+                ctx.beginPath();
+                ctx.lineWidth = 3 * viewScale; // Scale thickness
+                ctx.strokeStyle = d.color || '#FFFF00';
                 ctx.lineCap = 'round';
                 ctx.lineJoin = 'round';
+
                 let first = true;
-                currentStroke.points.forEach(pt => {
+                d.points.forEach(pt => {
                     const [dsx, dsy] = Transformer.worldToScreen(pt[0], pt[1]);
                     if (first) {
                         ctx.moveTo(dsx, dsy);
@@ -1510,959 +1615,956 @@
                 });
                 ctx.stroke();
             }
+        });
+    }
 
-            // Render Commander Markers (Fighters, etc.)
-            if (lastData.commander && lastData.commander.markers) {
-                lastData.commander.markers.forEach(m => {
-                    const [msx, msy] = Transformer.worldToScreen(m.x, m.y);
-                    drawCommanderIcon(ctx, msx, msy, m.type, m.color, m.label);
-                });
+    // Render local current stroke (while drawing)
+    if (isCommanderMode && currentStroke && currentStroke.points.length > 0) {
+        ctx.beginPath();
+        ctx.lineWidth = 3 * viewScale;
+        ctx.strokeStyle = currentStroke.color;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        let first = true;
+        currentStroke.points.forEach(pt => {
+            const [dsx, dsy] = Transformer.worldToScreen(pt[0], pt[1]);
+            if (first) {
+                ctx.moveTo(dsx, dsy);
+                first = false;
+            } else {
+                ctx.lineTo(dsx, dsy);
             }
+        });
+        ctx.stroke();
+    }
+
+    // Render Commander Markers (Fighters, etc.)
+    if (lastData.commander && lastData.commander.markers) {
+        lastData.commander.markers.forEach(m => {
+            const [msx, msy] = Transformer.worldToScreen(m.x, m.y);
+            drawCommanderIcon(ctx, msx, msy, m.type, m.color, m.label);
+        });
+    }
 
 
 
-            function worldToScreen(wx, wy) {
-                let nx = wx;
-                let ny = wy;
+    function worldToScreen(wx, wy) {
+        let nx = wx;
+        let ny = wy;
 
-                // Normalize if meters
-                if (wx < -1 || wx > 1 || wy < -1 || wy > 1) {
-                    nx = (wx - minX) / worldWidth;
-                    ny = (wy - minY) / worldHeight;
-                }
+        // Normalize if meters
+        if (wx < -1 || wx > 1 || wy < -1 || wy > 1) {
+            nx = (wx - minX) / worldWidth;
+            ny = (wy - minY) / worldHeight;
+        }
 
-                // Unified calculation: Offset + (Normalized * Absolute Drawing Width)
-                let sx = viewOffsetX + nx * (refW * viewScale);
-                let sy = viewOffsetY + ny * (refH * viewScale);
-                return [sx, sy];
+        // Unified calculation: Offset + (Normalized * Absolute Drawing Width)
+        let sx = viewOffsetX + nx * (refW * viewScale);
+        let sy = viewOffsetY + ny * (refH * viewScale);
+        return [sx, sy];
+    }
+
+    function drawCommanderIcon(ctx, sx, sy, type, color, label) {
+        ctx.save();
+        ctx.translate(sx, sy);
+
+        const baseScaleFactor = (lastData && lastData.config && lastData.config.web_marker_scale) || 2.3;
+        let markerScale = (typeof baselineScale !== 'undefined' ? baselineScale : 1.0) * baseScaleFactor * userMarkerScale;
+
+        // Ground targets draw NATO icons with a base size of 26 * markerScale
+        let size = 26 * markerScale;
+        let dSize = size * 0.8; // The actual width/height constraint radius of the shapes
+
+        ctx.lineWidth = 2 * markerScale; // Slightly bolder line for the frame
+        ctx.strokeStyle = '#000000'; // Black outline
+
+        if (type === 'fighter') {
+            ctx.fillStyle = '#ff7e7e'; // Exact Hostile Pastel Red used for ground targets
+
+            // Hostile Air shape (NATO)
+            // Taller roof, slightly taller body
+            ctx.beginPath();
+            ctx.moveTo(-dSize, dSize * 1.0);          // Bottom left
+            ctx.lineTo(-dSize, -dSize * 0.1);         // Up to roof start (slightly lower base for taller triangle)
+            ctx.lineTo(0, -dSize * 1.2);              // Apex (higher roof peak)
+            ctx.lineTo(dSize, -dSize * 0.1);          // Down to right roof edge
+            ctx.lineTo(dSize, dSize * 1.0);           // Bottom right
+            ctx.closePath();                          // Connect back to bottom left
+
+            ctx.fill();
+            ctx.stroke();
+
+            // 'F' inside (scaled to fit nicely inside the shape)
+            ctx.fillStyle = '#000000'; // Black text for contrast
+            ctx.font = `bold ${dSize * 1.2}px Arial`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            // Shift text upward to sit higher in the body
+            ctx.fillText('F', 0, dSize * 0.2);
+        }
+
+        if (label) {
+            ctx.fillStyle = color || 'cyan';
+            ctx.font = `${12 * viewScale}px Arial`;
+            ctx.textAlign = 'center';
+            ctx.fillText(label, 0, dSize * 1.5 + 4);
+        }
+
+        ctx.restore();
+    }
+
+    function isFriendlyColor(c) {
+        if (!c) return false;
+        const s = c.toString();
+        return s.includes('#043') || s.includes('4,63,255') ||
+            s.includes('#174DFF') || s.includes('23,77,255');
+    }
+
+    // Installation label cache (persistent across frames and page reloads)
+    if (!window.installationLabels) {
+        // Try to load from localStorage first
+        try {
+            const savedLabels = localStorage.getItem('nato_installation_labels');
+            if (savedLabels) {
+                window.installationLabels = new Map(JSON.parse(savedLabels));
+                console.log("Loaded " + window.installationLabels.size + " installation labels from persistence.");
+            } else {
+                window.installationLabels = new Map();
             }
+        } catch (e) {
+            console.error("Failed to load labels from localStorage:", e);
+            window.installationLabels = new Map();
+        }
+    }
 
-            function isFriendlyColor(c) {
-                if (!c) return false;
-                const s = c.toString();
-                return s.includes('#043') || s.includes('4,63,255') ||
-                    s.includes('#174DFF') || s.includes('23,77,255');
+    function getInstallationLabel(obj) {
+        // Round coordinates to prevent floating point variations
+        const roundedX = Math.round(obj.x * 1000) / 1000;
+        const roundedY = Math.round(obj.y * 1000) / 1000;
+        const key = `${roundedX}_${roundedY}_${obj.type}`;
+
+        if (!window.installationLabels.has(key)) {
+            const labels = [
+                "PS\nRM",      // Petroleum Storage (2 lines)
+                "PROC\nFAC",   // Processing Facility (2 lines)
+                "UTIL",        // Utility
+                "FUEL",        // Fuel Depot
+                "AMMO",        // Ammunition Depot
+                "CHEM"         // Chemical Plant
+            ];
+            const randomLabel = labels[Math.floor(Math.random() * labels.length)];
+            window.installationLabels.set(key, randomLabel);
+            console.log(`Assigned label "${randomLabel}" to installation at (${roundedX}, ${roundedY})`);
+
+            // Save to localStorage
+            try {
+                const entries = Array.from(window.installationLabels.entries());
+                localStorage.setItem('nato_installation_labels', JSON.stringify(entries));
+            } catch (e) {
+                console.error("Failed to save labels to localStorage:", e);
             }
+        }
+        return window.installationLabels.get(key);
+    }
 
-            // Installation label cache (persistent across frames and page reloads)
-            if (!window.installationLabels) {
-                // Try to load from localStorage first
-                try {
-                    const savedLabels = localStorage.getItem('nato_installation_labels');
-                    if (savedLabels) {
-                        window.installationLabels = new Map(JSON.parse(savedLabels));
-                        console.log("Loaded " + window.installationLabels.size + " installation labels from persistence.");
-                    } else {
-                        window.installationLabels = new Map();
-                    }
-                } catch (e) {
-                    console.error("Failed to load labels from localStorage:", e);
-                    window.installationLabels = new Map();
-                }
-            }
+    function drawNavalIcon(ctx, x, y, size, color, isFriendly, type, count = 1) {
+        ctx.save();
+        ctx.translate(x, y);
 
-            function getInstallationLabel(obj) {
-                // Round coordinates to prevent floating point variations
-                const roundedX = Math.round(obj.x * 1000) / 1000;
-                const roundedY = Math.round(obj.y * 1000) / 1000;
-                const key = `${roundedX}_${roundedY}_${obj.type}`;
+        // Friendly: Circle | Hostile: Diamond
+        ctx.lineWidth = 2 * markerScale;
+        ctx.strokeStyle = '#000000'; // Black Outline
+        ctx.fillStyle = color;
 
-                if (!window.installationLabels.has(key)) {
-                    const labels = [
-                        "PS\nRM",      // Petroleum Storage (2 lines)
-                        "PROC\nFAC",   // Processing Facility (2 lines)
-                        "UTIL",        // Utility
-                        "FUEL",        // Fuel Depot
-                        "AMMO",        // Ammunition Depot
-                        "CHEM"         // Chemical Plant
-                    ];
-                    const randomLabel = labels[Math.floor(Math.random() * labels.length)];
-                    window.installationLabels.set(key, randomLabel);
-                    console.log(`Assigned label "${randomLabel}" to installation at (${roundedX}, ${roundedY})`);
+        if (isFriendly) {
+            // Blue Circle
+            ctx.beginPath();
+            ctx.arc(0, 0, size * 0.6, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+        } else {
+            // Red Diamond
+            ctx.beginPath();
+            ctx.moveTo(0, -size * 0.8);
+            ctx.lineTo(size * 0.8, 0);
+            ctx.lineTo(0, size * 0.8);
+            ctx.lineTo(-size * 0.8, 0);
+            ctx.closePath();
+            ctx.fill();
+            ctx.stroke();
+        }
 
-                    // Save to localStorage
-                    try {
-                        const entries = Array.from(window.installationLabels.entries());
-                        localStorage.setItem('nato_installation_labels', JSON.stringify(entries));
-                    } catch (e) {
-                        console.error("Failed to save labels to localStorage:", e);
-                    }
-                }
-                return window.installationLabels.get(key);
-            }
+        // Text Label
+        let label = "";
+        const t = (type || "").toLowerCase();
+        if (t === "torpedoboat") label = "PT";
+        else if (t === "boat") label = "LS";
+        else if (t === "ship") label = "DD";
 
-            function drawNavalIcon(ctx, x, y, size, color, isFriendly, type, count = 1) {
+        if (label) {
+            ctx.fillStyle = '#000000'; // Black Text
+            ctx.font = `bold ${14 * markerScale}px Arial`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(label, 0, 0);
+        }
+
+        // Draw Quantity Number (if clustered)
+        if (count > 1) {
+            const markerTop = isFriendly ? -size * 0.6 : -size * 0.8;
+            ctx.fillStyle = '#000000'; // Black Text
+            ctx.font = `bold ${12 * markerScale}px Arial`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'bottom';
+            // Position above the marker
+            ctx.fillText(count.toString(), 0, markerTop - 2 * markerScale);
+        }
+
+        ctx.restore();
+    }
+
+
+
+    function drawNATOIcon(ctx, sx, sy, size, color, isFriendly, dots, iconType = "Mechanized", af = null, isReinforced = false) {
+        ctx.save();
+        ctx.translate(sx, sy);
+        ctx.lineWidth = 1 * markerScale;
+        const stroke = '#000000';
+        let markerTop = 0;
+        // Calculate scale for reinforced marker
+        const dSize = size * 0.8;
+        const rectW = size * 1.5;
+        const rectH = size * 1.0;
+
+        if (!isFriendly) {
+            // Hostile: Diamond
+            const dSize = size * 0.8;
+            markerTop = -dSize;
+            ctx.beginPath();
+            ctx.moveTo(0, -dSize);
+            ctx.lineTo(dSize, 0);
+            ctx.lineTo(0, dSize);
+            ctx.lineTo(-dSize, 0);
+            ctx.closePath();
+            ctx.fillStyle = color;
+            ctx.fill();
+            ctx.strokeStyle = stroke;
+            ctx.stroke();
+
+            if (iconType === "TankDestroyer") {
+                // 1. Anti-Tank Triangle (no top edge - inverted V)
+                ctx.beginPath();
+                // Left side: bottom-left to top
+                ctx.moveTo(-dSize / 2, dSize / 2);
+                ctx.lineTo(0, -dSize);
+                // Right side: top to bottom-right
+                ctx.lineTo(dSize / 2, dSize / 2);
+                ctx.strokeStyle = '#000000';
+                ctx.stroke();
+
+                // 2. Armor Stadium (Capsule)
+                const armW = (dSize * 1.2) - (2 * markerScale);
+                const armH = (dSize * 0.7) - (2 * markerScale);
+                const armR = armH / 2;
+                const armL = armW - 2 * armR;
+
+                ctx.beginPath();
+                ctx.moveTo(-armL / 2, -armH / 2);
+                ctx.lineTo(armL / 2, -armH / 2);
+                ctx.arc(armL / 2, 0, armR, -Math.PI / 2, Math.PI / 2);
+                ctx.lineTo(-armL / 2, armH / 2);
+                ctx.arc(-armL / 2, 0, armR, Math.PI / 2, 3 * Math.PI / 2);
+                ctx.stroke();
+
+                // 3. IFV Vertical Line (Left)
+                const ifvX = -armW / 2;
+                const ifvY = dSize - Math.abs(ifvX);
+                ctx.beginPath();
+                ctx.moveTo(ifvX, -ifvY);
+                ctx.lineTo(ifvX, ifvY);
+                ctx.stroke();
+                ctx.lineTo(ifvX, dSize * 0.3);
+                ctx.stroke();
+            } else if (iconType === "SPAA-SAM") {
+                // 1. Dome (Unified with AAA)
+                const domeY = dSize * 0.5;
+                const domeR = dSize * 0.45;
+                ctx.beginPath();
                 ctx.save();
-                ctx.translate(x, y);
-
-                // Friendly: Circle | Hostile: Diamond
-                ctx.lineWidth = 2 * markerScale;
-                ctx.strokeStyle = '#000000'; // Black Outline
-                ctx.fillStyle = color;
-
-                if (isFriendly) {
-                    // Blue Circle
-                    ctx.beginPath();
-                    ctx.arc(0, 0, size * 0.6, 0, Math.PI * 2);
-                    ctx.fill();
-                    ctx.stroke();
-                } else {
-                    // Red Diamond
-                    ctx.beginPath();
-                    ctx.moveTo(0, -size * 0.8);
-                    ctx.lineTo(size * 0.8, 0);
-                    ctx.lineTo(0, size * 0.8);
-                    ctx.lineTo(-size * 0.8, 0);
-                    ctx.closePath();
-                    ctx.fill();
-                    ctx.stroke();
-                }
-
-                // Text Label
-                let label = "";
-                const t = (type || "").toLowerCase();
-                if (t === "torpedoboat") label = "PT";
-                else if (t === "boat") label = "LS";
-                else if (t === "ship") label = "DD";
-
-                if (label) {
-                    ctx.fillStyle = '#000000'; // Black Text
-                    ctx.font = `bold ${14 * markerScale}px Arial`;
-                    ctx.textAlign = 'center';
-                    ctx.textBaseline = 'middle';
-                    ctx.fillText(label, 0, 0);
-                }
-
-                // Draw Quantity Number (if clustered)
-                if (count > 1) {
-                    const markerTop = isFriendly ? -size * 0.6 : -size * 0.8;
-                    ctx.fillStyle = '#000000'; // Black Text
-                    ctx.font = `bold ${12 * markerScale}px Arial`;
-                    ctx.textAlign = 'center';
-                    ctx.textBaseline = 'bottom';
-                    // Position above the marker
-                    ctx.fillText(count.toString(), 0, markerTop - 2 * markerScale);
-                }
-
+                ctx.translate(0, domeY);
+                ctx.scale(1, 0.35);
+                ctx.arc(0, 0, domeR, Math.PI, 0, false);
                 ctx.restore();
-            }
+                ctx.stroke();
 
-            function drawCommanderIcon(ctx, x, y, type, color, label) {
+                // 2. Missile Symbol
+                const mW = dSize * 0.25;
+                const mH = dSize * 0.9;
+                const domeVisualHeight = domeR * 0.35;
+                const missileBottomY = domeY - domeVisualHeight;
+
+                ctx.beginPath();
                 ctx.save();
-                ctx.translate(x, y);
-
-                // Glow effect
-                ctx.shadowColor = color;
-                ctx.shadowBlur = 10;
-
-                ctx.strokeStyle = color;
-                ctx.lineWidth = 2;
-                ctx.fillStyle = color; // For fill opacity
-
-                if (type === 'fighter') {
-                    // NATO Friendly Air: Rectangle with Fixed Wing (Infinity-ish) symbol
-                    const size = markerScale * 25; // Base size
-                    const rectW = size * 1.5;
-                    const rectH = size * 1.0;
-
-                    // Draw Frame (Rectangle)
-                    ctx.beginPath();
-                    ctx.rect(-rectW / 2, -rectH / 2, rectW, rectH);
-                    ctx.fillStyle = color; // Fill uses the color (typically cyan)
-                    ctx.globalAlpha = 0.2; // Low opacity fill
-                    ctx.fill();
-                    ctx.globalAlpha = 1.0;
-                    ctx.strokeStyle = color;
-                    ctx.lineWidth = 2;
-                    ctx.stroke();
-
-                    // Draw Symbol (Fixed Wing / Infinity)
-                    // Simplified "sideways 8" or two loops
-                    // Start left loop
-                    const wingW = rectW * 0.6;
-                    const wingH = rectH * 0.4;
-
-                    ctx.beginPath();
-                    ctx.strokeStyle = color; // or black/white depending on contrast? Stick to color for neon look
-                    ctx.lineWidth = 2;
-
-                    // Bezier curves for infinity symbol centered at 0,0
-                    // Left Loop
-                    ctx.moveTo(0, 0);
-                    ctx.bezierCurveTo(-wingW / 2, -wingH, -wingW, 0, 0, 0);
-                    // Right Loop
-                    ctx.moveTo(0, 0);
-                    ctx.bezierCurveTo(wingW / 2, -wingH, wingW, 0, 0, 0);
-
-                    // Bottom curves? The symbol is traditionally two loops up, tied at bottom.
-                    // Actually standard is 'loop-loop' like a bow tie or infinity. 
-                    // Let's do a simple bow-tie shape for "Fixed Wing"
-
-                    // Clear previous path logic, do simple bow tie
-                    const bw = rectW * 0.3;
-                    const bh = rectH * 0.25;
-
-                    ctx.beginPath();
-                    ctx.moveTo(0, 0);
-                    // Left Loop
-                    ctx.bezierCurveTo(-bw, -bh, -bw, bh, 0, 0);
-                    // Right Loop
-                    ctx.bezierCurveTo(bw, -bh, bw, bh, 0, 0);
-
-                    ctx.stroke();
-                }
-
-                if (label) {
-                    ctx.shadowBlur = 0;
-                    ctx.fillStyle = "#FFFFFF";
-                    ctx.font = `bold ${12 * markerScale}px Arial`;
-                    ctx.textAlign = "center";
-                    ctx.fillText(label, 0, 20 * markerScale);
-                }
-
+                ctx.translate(0, missileBottomY - mH / 2);
+                // Center spine restored
+                ctx.moveTo(0, mH / 2);
+                ctx.lineTo(0, -mH / 2);
+                // Outline
+                ctx.moveTo(-mW / 2, mH / 2);
+                ctx.lineTo(-mW / 2, -mH / 10);
+                ctx.lineTo(0, -mH / 2);
+                ctx.lineTo(mW / 2, -mH / 10);
+                ctx.lineTo(mW / 2, mH / 2);
+                ctx.lineTo(-mW / 2, mH / 2);
                 ctx.restore();
+                ctx.stroke();
+            } else if (iconType === "AAA") {
+                // AAA: Dome + Capsule + Vertical Line
+                // Hostile Diamond is tighter, so we must scale down to fit
+
+                // 1. Dome (Positioned lower)
+                const domeY = dSize * 0.5;
+                // dSize * 0.45 ensures it fits diamond width at y=0.5
+                const domeR = dSize * 0.45;
+                ctx.beginPath();
+                ctx.save();
+                ctx.translate(0, domeY);
+                ctx.scale(1, 0.35);
+                ctx.arc(0, 0, domeR, Math.PI, 0, false);
+                ctx.restore();
+                ctx.stroke();
+
+                // 2. Capsule (Standard Size: 1.2 x 0.7)
+                const armW = (dSize * 1.2) - (2 * markerScale);
+                const armH = (dSize * 0.7) - (2 * markerScale);
+                const armR = armH / 2;
+                const armL = armW - 2 * armR;
+
+                // Capsule bottom touches Dome top
+                // Dome top is at: domeY - (domeH_visual_top)
+                // Dome is scaled vertically by 0.35, so visual radius is domeR * 0.35
+                const domeVisualHeight = domeR * 0.35;
+                const capsuleY = domeY - domeVisualHeight - (armH / 2);
+
+                ctx.beginPath();
+                ctx.save();
+                ctx.translate(0, capsuleY);
+                ctx.moveTo(-armL / 2, -armH / 2);
+                ctx.lineTo(armL / 2, -armH / 2);
+                ctx.arc(armL / 2, 0, armR, -Math.PI / 2, Math.PI / 2);
+                ctx.lineTo(-armL / 2, armH / 2);
+                ctx.arc(-armL / 2, 0, armR, Math.PI / 2, 3 * Math.PI / 2);
+                ctx.restore();
+                ctx.stroke();
+
+                // 3. Vertical line from top to bottom (Clamped to Diamond edges)
+                const lineX = -armW / 2;
+                const maxLineY = dSize - Math.abs(lineX); // Limit defined by diamond boundary
+
+                ctx.beginPath();
+                ctx.moveTo(lineX, -maxLineY - 2 * markerScale); // Extended Top
+                ctx.lineTo(lineX, maxLineY + 2 * markerScale);  // Extended Bottom
+                ctx.stroke();
+            } else if (iconType === "Armored") {
+                // Armored: Capsule only
+                const armW = (dSize * 1.2) - (2 * markerScale);
+                const armH = (dSize * 0.7) - (2 * markerScale);
+                const armR = armH / 2;
+                const armL = armW - 2 * armR;
+
+                ctx.beginPath();
+                ctx.moveTo(-armL / 2, -armH / 2);
+                ctx.lineTo(armL / 2, -armH / 2);
+                ctx.arc(armL / 2, 0, armR, -Math.PI / 2, Math.PI / 2);
+                ctx.lineTo(-armL / 2, armH / 2);
+                ctx.arc(-armL / 2, 0, armR, Math.PI / 2, 3 * Math.PI / 2);
+                ctx.stroke();
+            } else if (iconType === "Infantry") {
+                // Infantry: X inside frame (scaled to fit in diamond)
+                const xSize = dSize * 0.5;
+                ctx.beginPath();
+                ctx.moveTo(-xSize, -xSize);
+                ctx.lineTo(xSize, xSize);
+                ctx.moveTo(xSize, -xSize);
+                ctx.lineTo(-xSize, xSize);
+                ctx.stroke();
+            } else {
+                // Default: Mechanized (Capsule + X)
+                const armW = (dSize * 1.2) - (2 * markerScale);
+                const armH = (dSize * 0.7) - (2 * markerScale);
+                const armR = armH / 2;
+                const armL = armW - 2 * armR;
+
+                ctx.beginPath();
+                ctx.moveTo(-armL / 2, -armH / 2);
+                ctx.lineTo(armL / 2, -armH / 2);
+                ctx.arc(armL / 2, 0, armR, -Math.PI / 2, Math.PI / 2);
+                ctx.lineTo(-armL / 2, armH / 2);
+                ctx.arc(-armL / 2, 0, armR, Math.PI / 2, 3 * Math.PI / 2);
+                ctx.moveTo(-armL / 2, -armH / 2);
+                ctx.lineTo(armL / 2, armH / 2);
+                ctx.moveTo(armL / 2, -armH / 2);
+                ctx.lineTo(-armL / 2, armH / 2);
+                ctx.stroke();
+                ctx.lineTo(-armL / 2, armH / 2);
+                ctx.arc(-armL / 2, 0, armR, Math.PI / 2, 3 * Math.PI / 2);
+                ctx.stroke();
+
+                const xW = dSize * 0.5;
+                const xH = dSize * 0.5;
+                ctx.beginPath();
+                ctx.moveTo(-xW, -xH); ctx.lineTo(xW, xH);
+                ctx.moveTo(-xW, xH); ctx.lineTo(xW, -xH);
+                ctx.stroke();
+
+                const ifvX = -armW / 2;
+                const ifvY = dSize - Math.abs(ifvX);
+                ctx.beginPath();
+                ctx.moveTo(ifvX, -ifvY);
+                ctx.lineTo(ifvX, ifvY);
+                ctx.stroke();
             }
 
-            function drawNATOIcon(ctx, sx, sy, size, color, isFriendly, dots, iconType = "Mechanized", af = null, isReinforced = false) {
+        } else {
+            // Friendly: Rectangle
+            const rectW = size * 1.5;
+            const rectH = size * 1.0;
+            markerTop = -rectH / 2;
+            ctx.beginPath();
+            ctx.rect(-rectW / 2, -rectH / 2, rectW, rectH);
+            ctx.fillStyle = color;
+            ctx.fill();
+            ctx.strokeStyle = stroke;
+            ctx.stroke();
+
+            if (iconType === "TankDestroyer") {
+                // 1. Anti-Tank Triangle (Touching Top Centre, Bottom Corners)
+                ctx.beginPath();
+                ctx.moveTo(0, -rectH / 2);          // Top Centre
+                ctx.lineTo(rectW / 2, rectH / 2);   // Bottom Right
+                ctx.lineTo(-rectW / 2, rectH / 2);  // Bottom Left
+                ctx.closePath();
+                ctx.strokeStyle = '#000000';
+                ctx.stroke();
+
+                // 2. Armor Stadium
+                const armW = (size * 0.8 * 1.2) - (2 * markerScale);
+                const armH = (size * 0.8 * 0.7) - (2 * markerScale);
+                const armR = armH / 2;
+                const armL = armW - 2 * armR;
+
+                ctx.beginPath();
+                ctx.moveTo(-armL / 2, -armH / 2);
+                ctx.lineTo(armL / 2, -armH / 2);
+                ctx.arc(armL / 2, 0, armR, -Math.PI / 2, Math.PI / 2);
+                ctx.lineTo(-armL / 2, armH / 2);
+                ctx.arc(-armL / 2, 0, armR, Math.PI / 2, 3 * Math.PI / 2);
+                ctx.stroke();
+
+                // 3. IFV Vertical Line (Left)
+                ctx.beginPath();
+                ctx.moveTo(-armW / 2, -rectH / 2);
+                ctx.lineTo(-armW / 2, rectH / 2);
+                ctx.stroke();
+                ctx.stroke();
+            } else if (iconType === "SPAA-SAM") {
+                // 1. Dome Base at the Bottom
+                ctx.beginPath();
                 ctx.save();
-                ctx.translate(sx, sy);
-                ctx.lineWidth = 1 * markerScale;
-                const stroke = '#000000';
-                let markerTop = 0;
-                // Calculate scale for reinforced marker
+                ctx.translate(0, rectH * 0.48); // Moved back to original bottom
+                ctx.scale(1, 0.35);
+                ctx.arc(0, 0, rectW * 0.48, Math.PI, 0, false);
+                ctx.restore();
+                ctx.stroke();
+
+                // 2. Missile Symbol sitting on top of the dome
+                const mW = rectW * 0.18; // Smaller width
+                const mH = rectH * 0.65; // Smaller height
+                const missileBottomY = (rectH * 0.3) - (2 * markerScale); // Moved 2px up
+                ctx.beginPath();
+                ctx.save();
+                ctx.translate(0, missileBottomY - mH / 2);
+                // Vertical shaft
+                ctx.moveTo(0, mH / 2);
+                ctx.lineTo(0, -mH / 2);
+                // Warhead/Triangular head
+                ctx.moveTo(-mW / 2, mH / 2);
+                ctx.lineTo(-mW / 2, -mH / 10); // Body side
+                ctx.lineTo(0, -mH / 2);        // Point
+                ctx.lineTo(mW / 2, -mH / 10);  // Body side
+                ctx.lineTo(mW / 2, mH / 2);
+                ctx.restore();
+                ctx.stroke();
+                ctx.stroke();
+            } else if (iconType === "AAA") {
+                // AAA: Dome + Capsule + Vertical Line
+                // 1. Dome at bottom (same level as SAM)
+                const domeY = rectH * 0.48; // Same as SAM site
+                ctx.beginPath();
+                ctx.save();
+                ctx.translate(0, domeY);
+                ctx.scale(1, 0.35);
+                ctx.arc(0, 0, rectW * 0.48, Math.PI, 0, false);
+                ctx.restore();
+                ctx.stroke();
+
+                // 2. Capsule sitting ABOVE dome (larger)
+                const armW = (size * 0.8 * 1.2) - (2 * markerScale); // Increased from 1.0
+                const armH = (size * 0.8 * 0.7) - (2 * markerScale); // Increased from 0.5
+                const armR = armH / 2;
+                const armL = armW - 2 * armR;
+                const capsuleY = domeY - (rectW * 0.48 * 0.35) - armH / 2; // Bottom of capsule touches top of dome
+
+                ctx.beginPath();
+                ctx.save();
+                ctx.translate(0, capsuleY);
+                ctx.moveTo(-armL / 2, -armH / 2);
+                ctx.lineTo(armL / 2, -armH / 2);
+                ctx.arc(armL / 2, 0, armR, -Math.PI / 2, Math.PI / 2);
+                ctx.lineTo(-armL / 2, armH / 2);
+                ctx.arc(-armL / 2, 0, armR, Math.PI / 2, 3 * Math.PI / 2);
+                ctx.restore();
+                ctx.stroke();
+
+                // 3. Vertical line from top to bottom (extended)
+                ctx.beginPath();
+                ctx.moveTo(-armW / 2, -rectH / 2 - 2 * markerScale); // Top of rectangle - 2px
+                ctx.lineTo(-armW / 2, rectH / 2 + 2 * markerScale); // Bottom of rectangle + 2px
+                ctx.stroke();
+            } else if (iconType === "Armored") {
+                // Armored: Capsule only (no cross or line)
+                const armW = (size * 0.8 * 1.2) - (2 * markerScale);
+                const armH = (size * 0.8 * 0.7) - (2 * markerScale);
+                const armR = armH / 2;
+                const armL = armW - 2 * armR;
+
+                ctx.beginPath();
+                ctx.moveTo(-armL / 2, -armH / 2);
+                ctx.lineTo(armL / 2, -armH / 2);
+                ctx.arc(armL / 2, 0, armR, -Math.PI / 2, Math.PI / 2);
+                ctx.lineTo(-armL / 2, armH / 2);
+                ctx.arc(-armL / 2, 0, armR, Math.PI / 2, 3 * Math.PI / 2);
+                ctx.stroke();
+            } else if (iconType === "Infantry") {
+                // Infantry: X only (no capsule)
+                const xW = rectW * 0.9;
+                const xH = rectH * 0.9;
+                ctx.beginPath();
+                ctx.moveTo(-xW / 2, -xH / 2); ctx.lineTo(xW / 2, xH / 2);
+                ctx.moveTo(-xW / 2, xH / 2); ctx.lineTo(xW / 2, -xH / 2);
+                ctx.stroke();
+            } else {
+                // Default: Combined Arms (Mechanized)
+                const armW = (size * 0.8 * 1.2) - (2 * markerScale);
+                const armH = (size * 0.8 * 0.7) - (2 * markerScale);
+                const armR = armH / 2;
+                const armL = armW - 2 * armR;
+
+                ctx.beginPath();
+                ctx.moveTo(-armL / 2, -armH / 2);
+                ctx.lineTo(armL / 2, -armH / 2);
+                ctx.arc(armL / 2, 0, armR, -Math.PI / 2, Math.PI / 2);
+                ctx.lineTo(-armL / 2, armH / 2);
+                ctx.arc(-armL / 2, 0, armR, Math.PI / 2, 3 * Math.PI / 2);
+                ctx.stroke();
+
+                const xW = rectW / 2;
+                const xH = rectH / 2;
+                ctx.beginPath();
+                ctx.moveTo(-xW, -xH); ctx.lineTo(xW, xH);
+                ctx.moveTo(-xW, xH); ctx.lineTo(xW, -xH);
+                ctx.stroke();
+
+                ctx.beginPath();
+                ctx.moveTo(-armW / 2, -rectH / 2);
+                ctx.lineTo(-armW / 2, rectH / 2);
+                ctx.stroke();
+            }
+        }
+
+        if (isReinforced) {
+            // Draw (+) symbol at top right, aligned with Unit Size dots and Shape Diagonal
+            // Placed at the "virtual corner" of the bounding box
+
+            // User Request: 2px closer for Rect (Friendly), 10px closer for Diamond (Hostile)
+            // Previous baseline was 8. 
+            // Friendly: 8 - 2 = 6.
+            // Hostile: 8 - 10 = -2.
+            const offset = isFriendly ? 6 * markerScale : -2 * markerScale;
+
+            const plusY = markerTop - offset;
+            // Friendly: Right edge of Rect. Hostile: Right edge of Bounding Box (dSize)
+            const plusX = isFriendly ? (rectW / 2 + offset) : (dSize + offset);
+
+            const plusSize = 10 * markerScale;
+
+            ctx.lineWidth = 2 * markerScale;
+            ctx.strokeStyle = '#000000';
+            ctx.beginPath();
+            // Horizontal
+            ctx.moveTo(plusX - plusSize / 2, plusY);
+            ctx.lineTo(plusX + plusSize / 2, plusY);
+            // Vertical
+            ctx.moveTo(plusX, plusY - plusSize / 2);
+            ctx.lineTo(plusX, plusY + plusSize / 2);
+            ctx.stroke();
+        }
+
+        if (dots > 0) {
+            ctx.fillStyle = '#000000';
+            const dotSize = 6 * markerScale; // Reduced size
+            const gap = 3 * markerScale; // Fixed gap between dots
+            const totalW = dots * dotSize + (dots - 1) * gap;
+            let startX = -totalW / 2 + dotSize / 2;
+            const offsetFromTop = 4 * markerScale; // Fixed offset from icon top
+            const yPos = markerTop - offsetFromTop - (dotSize / 2);
+
+            for (let i = 0; i < dots; i++) {
+                ctx.beginPath();
+                ctx.arc(startX + i * (dotSize + gap), yPos, dotSize / 2, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+        ctx.restore();
+    }
+
+    // 1. Draw Airfields - Moved to Step 4 (After Ground Units)
+
+    function drawLegend(ctx) {
+        if (!showLegend) return;
+
+        const items = [
+            { type: "SPAA-SAM", label: "SAM" }, // Airfield Defense
+            { type: "AAA", label: "AAA" }, // Generic Anti-Air
+            { type: "TankDestroyer", label: "AT" },
+            { type: "Armored", label: "ARMOR" },
+            { type: "Mechanized", label: "MECH" },
+            { type: "Infantry", label: "INF" }
+        ];
+
+        const gap = 30 * markerScale; // Gap between items
+        const iconAreaW = 50 * markerScale; // Width reserved for dual icons (Red + Blue)
+        const padding = 20 * markerScale;
+
+        // 1. Calculate Sizes
+        ctx.font = `bold ${14 * markerScale}px Arial`;
+        let totalContentW = 0;
+        let itemWidths = [];
+
+        items.forEach((item, i) => {
+            const textW = ctx.measureText(item.label).width;
+            const itemW = iconAreaW + textW;
+            itemWidths.push(itemW);
+            totalContentW += itemW;
+            if (i < items.length - 1) totalContentW += gap;
+        });
+
+        const boxW = totalContentW + (padding * 2);
+        const boxH = 70 * markerScale;
+        const startX = 15;
+        const startY = (canvas.height / dpr) - boxH - 15;
+
+        ctx.save();
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+        // Background
+        ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
+        ctx.beginPath();
+        if (ctx.roundRect) {
+            ctx.roundRect(startX, startY, boxW, boxH, 8 * markerScale);
+        } else {
+            ctx.rect(startX, startY, boxW, boxH);
+        }
+        ctx.fill();
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.2)";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        // Draw Items
+        let currentX = startX + padding;
+        const yTop = startY + boxH * 0.35;
+        const yBottom = startY + boxH * 0.65;
+
+        items.forEach((item, i) => {
+            const itemW = itemWidths[i];
+
+            // Icon Positions
+            drawNATOIcon(ctx, currentX + 10 * markerScale, yTop, 20 * markerScale, "#ff7e7e", false, 0, item.type);
+            drawNATOIcon(ctx, currentX + 34 * markerScale, yBottom, 20 * markerScale, "#7ee2ff", true, 0, item.type);
+
+            // Label
+            ctx.fillStyle = "#FFFFFF";
+            ctx.font = `bold ${14 * markerScale}px Arial`;
+            ctx.textAlign = "left";
+            ctx.textBaseline = "middle";
+            // Label starts after icon area
+            ctx.fillText(item.label, currentX + iconAreaW, startY + boxH / 2);
+
+            // Advance X
+            currentX += itemW + gap;
+        });
+
+        ctx.restore();
+    }
+
+    function getNATOType(cluster) {
+        const icons = cluster.units.map(u => u.icon || "");
+
+        // Dominant Type Logic
+        let counts = {
+            "Armored": 0,       // Medium/Heavy Tank
+            "Mechanized": 0,    // Light Tank/IFV/APC
+            "Infantry": 0,      // Ground / Infantry
+            "TankDestroyer": 0, // ATGM / TD
+            "AAA": 0            // SPAA / Generic AA (NOT airfield defense)
+        };
+
+        icons.forEach(i => {
+            const s = i.toLowerCase();
+            if (s.includes("mediumtank") || s.includes("medium_tank") || s.includes("heavytank")) {
+                counts["Armored"]++;
+            } else if (s.includes("lighttank") || s.includes("light_tank") || s.includes("ifv") || s.includes("apc")) {
+                counts["Mechanized"]++;
+            } else if (s.includes("ground") || s.includes("infantry")) {
+                counts["Infantry"]++;
+            } else if (s.includes("tankdestroyer") || s.includes("tank_destroyer") || s === "td") {
+                counts["TankDestroyer"]++;
+            } else if (s.includes("spaa") || s.includes("sam")) {
+                counts["AAA"]++;
+            }
+        });
+
+        // Find type with max count
+        let maxType = "Mechanized"; // Default
+        let maxCount = 0;
+
+        for (const [type, count] of Object.entries(counts)) {
+            if (count > maxCount) {
+                maxCount = count;
+                maxType = type;
+            }
+        }
+
+        // Tie-breaker: If Armored and Mechanized have equal counts, prioritize Mechanized
+        if (maxType === "Armored" && counts["Mechanized"] === maxCount) {
+            maxType = "Mechanized";
+        }
+
+        // Priority 1: Airfield Defense (Only if dominant type is AAA)
+        if (maxType === "AAA" && lastData.airfields && lastData.airfields.length > 0) {
+            let nearestAF = null;
+            let minDist = 0.03; // Very tight threshold - only SPAAs at AF center
+            lastData.airfields.forEach(af => {
+                const dx = af.x - cluster.x;
+                const dy = af.y - cluster.y;
+                const d = Math.sqrt(dx * dx + dy * dy);
+                if (d < minDist) {
+                    minDist = d;
+                    nearestAF = af;
+                }
+            });
+            if (nearestAF) return { type: "SPAA-SAM", af: nearestAF };
+        }
+
+        // Check for Reinforced Unit (3 or more distinct types)
+        let distinctTypes = 0;
+        for (const count of Object.values(counts)) {
+            if (count > 0) distinctTypes++;
+        }
+        const isReinforced = distinctTypes >= 3;
+
+        return { type: maxType, dominantCount: maxCount, isReinforced: isReinforced };
+    }
+
+    if (lastData.objectives && lastData.objectives.length > 0) {
+        lastData.objectives.forEach(obj => {
+            const [sx, sy] = worldToScreen(obj.x, obj.y);
+            const color = obj.color || '#FF0000';
+            const size = 26 * markerScale; // Increased NATO size
+
+            ctx.save();
+            ctx.translate(sx, sy);
+            ctx.lineWidth = 1 * markerScale;
+
+            if (obj.type === 'bombing_point') {
+                // NATO Hostile / Target: Red Diamond
+                // Scaled to 0.8 to visually match the weight of the rectangle
                 const dSize = size * 0.8;
+
+                // 1. Installation Marker: Black SQUARE (Draw FIRST so it is BEHIND)
+                // "make the black retanlge for installtion smaller, black sqarure bigger"
+                const sqSize = size * 0.5; // Increased from 0.4
+                ctx.fillStyle = '#000000';
+                // Center of square = (0, -dSize)
+                // Top-Left = (-sqSize/2, -dSize - sqSize/2)
+                ctx.fillRect(-sqSize / 2, -dSize - sqSize / 2, sqSize, sqSize);
+
+                ctx.beginPath();
+                ctx.moveTo(0, -dSize);    // Top
+                ctx.lineTo(dSize, 0);     // Right
+                ctx.lineTo(0, dSize);     // Bottom
+                ctx.lineTo(-dSize, 0);    // Left
+                ctx.closePath();
+
+                ctx.fillStyle = '#ff7e7e'; // Hostile Red (Pastel)
+                ctx.fill();
+                ctx.strokeStyle = '#000000'; // Black Outline
+                ctx.stroke();
+
+                // Installation label inside diamond
+                const label = getInstallationLabel(obj);
+                const lines = label.split('\n');
+                ctx.fillStyle = '#000000';
+                ctx.font = `bold ${8 * markerScale}px Arial`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                const lineHeight = 9 * markerScale;
+                const startY = -(lines.length - 1) * lineHeight / 2;
+                lines.forEach((line, i) => {
+                    ctx.fillText(line, 0, startY + i * lineHeight);
+                });
+
+            } else if (obj.type === 'defending_point') {
+                // NATO Friendly: Blue Rectangle
                 const rectW = size * 1.5;
                 const rectH = size * 1.0;
 
-                if (!isFriendly) {
-                    // Hostile: Diamond
-                    const dSize = size * 0.8;
-                    markerTop = -dSize;
-                    ctx.beginPath();
-                    ctx.moveTo(0, -dSize);
-                    ctx.lineTo(dSize, 0);
-                    ctx.lineTo(0, dSize);
-                    ctx.lineTo(-dSize, 0);
-                    ctx.closePath();
-                    ctx.fillStyle = color;
-                    ctx.fill();
-                    ctx.strokeStyle = stroke;
-                    ctx.stroke();
-
-                    if (iconType === "TankDestroyer") {
-                        // 1. Anti-Tank Triangle (no top edge - inverted V)
-                        ctx.beginPath();
-                        // Left side: bottom-left to top
-                        ctx.moveTo(-dSize / 2, dSize / 2);
-                        ctx.lineTo(0, -dSize);
-                        // Right side: top to bottom-right
-                        ctx.lineTo(dSize / 2, dSize / 2);
-                        ctx.strokeStyle = '#000000';
-                        ctx.stroke();
-
-                        // 2. Armor Stadium (Capsule)
-                        const armW = (dSize * 1.2) - (2 * markerScale);
-                        const armH = (dSize * 0.7) - (2 * markerScale);
-                        const armR = armH / 2;
-                        const armL = armW - 2 * armR;
-
-                        ctx.beginPath();
-                        ctx.moveTo(-armL / 2, -armH / 2);
-                        ctx.lineTo(armL / 2, -armH / 2);
-                        ctx.arc(armL / 2, 0, armR, -Math.PI / 2, Math.PI / 2);
-                        ctx.lineTo(-armL / 2, armH / 2);
-                        ctx.arc(-armL / 2, 0, armR, Math.PI / 2, 3 * Math.PI / 2);
-                        ctx.stroke();
-
-                        // 3. IFV Vertical Line (Left)
-                        const ifvX = -armW / 2;
-                        const ifvY = dSize - Math.abs(ifvX);
-                        ctx.beginPath();
-                        ctx.moveTo(ifvX, -ifvY);
-                        ctx.lineTo(ifvX, ifvY);
-                        ctx.stroke();
-                        ctx.lineTo(ifvX, dSize * 0.3);
-                        ctx.stroke();
-                    } else if (iconType === "SPAA-SAM") {
-                        // 1. Dome (Unified with AAA)
-                        const domeY = dSize * 0.5;
-                        const domeR = dSize * 0.45;
-                        ctx.beginPath();
-                        ctx.save();
-                        ctx.translate(0, domeY);
-                        ctx.scale(1, 0.35);
-                        ctx.arc(0, 0, domeR, Math.PI, 0, false);
-                        ctx.restore();
-                        ctx.stroke();
-
-                        // 2. Missile Symbol
-                        const mW = dSize * 0.25;
-                        const mH = dSize * 0.9;
-                        const domeVisualHeight = domeR * 0.35;
-                        const missileBottomY = domeY - domeVisualHeight;
-
-                        ctx.beginPath();
-                        ctx.save();
-                        ctx.translate(0, missileBottomY - mH / 2);
-                        // Center spine restored
-                        ctx.moveTo(0, mH / 2);
-                        ctx.lineTo(0, -mH / 2);
-                        // Outline
-                        ctx.moveTo(-mW / 2, mH / 2);
-                        ctx.lineTo(-mW / 2, -mH / 10);
-                        ctx.lineTo(0, -mH / 2);
-                        ctx.lineTo(mW / 2, -mH / 10);
-                        ctx.lineTo(mW / 2, mH / 2);
-                        ctx.lineTo(-mW / 2, mH / 2);
-                        ctx.restore();
-                        ctx.stroke();
-                    } else if (iconType === "AAA") {
-                        // AAA: Dome + Capsule + Vertical Line
-                        // Hostile Diamond is tighter, so we must scale down to fit
-
-                        // 1. Dome (Positioned lower)
-                        const domeY = dSize * 0.5;
-                        // dSize * 0.45 ensures it fits diamond width at y=0.5
-                        const domeR = dSize * 0.45;
-                        ctx.beginPath();
-                        ctx.save();
-                        ctx.translate(0, domeY);
-                        ctx.scale(1, 0.35);
-                        ctx.arc(0, 0, domeR, Math.PI, 0, false);
-                        ctx.restore();
-                        ctx.stroke();
-
-                        // 2. Capsule (Standard Size: 1.2 x 0.7)
-                        const armW = (dSize * 1.2) - (2 * markerScale);
-                        const armH = (dSize * 0.7) - (2 * markerScale);
-                        const armR = armH / 2;
-                        const armL = armW - 2 * armR;
-
-                        // Capsule bottom touches Dome top
-                        // Dome top is at: domeY - (domeH_visual_top)
-                        // Dome is scaled vertically by 0.35, so visual radius is domeR * 0.35
-                        const domeVisualHeight = domeR * 0.35;
-                        const capsuleY = domeY - domeVisualHeight - (armH / 2);
-
-                        ctx.beginPath();
-                        ctx.save();
-                        ctx.translate(0, capsuleY);
-                        ctx.moveTo(-armL / 2, -armH / 2);
-                        ctx.lineTo(armL / 2, -armH / 2);
-                        ctx.arc(armL / 2, 0, armR, -Math.PI / 2, Math.PI / 2);
-                        ctx.lineTo(-armL / 2, armH / 2);
-                        ctx.arc(-armL / 2, 0, armR, Math.PI / 2, 3 * Math.PI / 2);
-                        ctx.restore();
-                        ctx.stroke();
-
-                        // 3. Vertical line from top to bottom (Clamped to Diamond edges)
-                        const lineX = -armW / 2;
-                        const maxLineY = dSize - Math.abs(lineX); // Limit defined by diamond boundary
-
-                        ctx.beginPath();
-                        ctx.moveTo(lineX, -maxLineY - 2 * markerScale); // Extended Top
-                        ctx.lineTo(lineX, maxLineY + 2 * markerScale);  // Extended Bottom
-                        ctx.stroke();
-                    } else if (iconType === "Armored") {
-                        // Armored: Capsule only
-                        const armW = (dSize * 1.2) - (2 * markerScale);
-                        const armH = (dSize * 0.7) - (2 * markerScale);
-                        const armR = armH / 2;
-                        const armL = armW - 2 * armR;
-
-                        ctx.beginPath();
-                        ctx.moveTo(-armL / 2, -armH / 2);
-                        ctx.lineTo(armL / 2, -armH / 2);
-                        ctx.arc(armL / 2, 0, armR, -Math.PI / 2, Math.PI / 2);
-                        ctx.lineTo(-armL / 2, armH / 2);
-                        ctx.arc(-armL / 2, 0, armR, Math.PI / 2, 3 * Math.PI / 2);
-                        ctx.stroke();
-                    } else if (iconType === "Infantry") {
-                        // Infantry: X inside frame (scaled to fit in diamond)
-                        const xSize = dSize * 0.5;
-                        ctx.beginPath();
-                        ctx.moveTo(-xSize, -xSize);
-                        ctx.lineTo(xSize, xSize);
-                        ctx.moveTo(xSize, -xSize);
-                        ctx.lineTo(-xSize, xSize);
-                        ctx.stroke();
-                    } else {
-                        // Default: Mechanized (Capsule + X)
-                        const armW = (dSize * 1.2) - (2 * markerScale);
-                        const armH = (dSize * 0.7) - (2 * markerScale);
-                        const armR = armH / 2;
-                        const armL = armW - 2 * armR;
-
-                        ctx.beginPath();
-                        ctx.moveTo(-armL / 2, -armH / 2);
-                        ctx.lineTo(armL / 2, -armH / 2);
-                        ctx.arc(armL / 2, 0, armR, -Math.PI / 2, Math.PI / 2);
-                        ctx.lineTo(-armL / 2, armH / 2);
-                        ctx.arc(-armL / 2, 0, armR, Math.PI / 2, 3 * Math.PI / 2);
-                        ctx.moveTo(-armL / 2, -armH / 2);
-                        ctx.lineTo(armL / 2, armH / 2);
-                        ctx.moveTo(armL / 2, -armH / 2);
-                        ctx.lineTo(-armL / 2, armH / 2);
-                        ctx.stroke();
-                        ctx.lineTo(-armL / 2, armH / 2);
-                        ctx.arc(-armL / 2, 0, armR, Math.PI / 2, 3 * Math.PI / 2);
-                        ctx.stroke();
-
-                        const xW = dSize * 0.5;
-                        const xH = dSize * 0.5;
-                        ctx.beginPath();
-                        ctx.moveTo(-xW, -xH); ctx.lineTo(xW, xH);
-                        ctx.moveTo(-xW, xH); ctx.lineTo(xW, -xH);
-                        ctx.stroke();
-
-                        const ifvX = -armW / 2;
-                        const ifvY = dSize - Math.abs(ifvX);
-                        ctx.beginPath();
-                        ctx.moveTo(ifvX, -ifvY);
-                        ctx.lineTo(ifvX, ifvY);
-                        ctx.stroke();
-                    }
-
-                } else {
-                    // Friendly: Rectangle
-                    const rectW = size * 1.5;
-                    const rectH = size * 1.0;
-                    markerTop = -rectH / 2;
-                    ctx.beginPath();
-                    ctx.rect(-rectW / 2, -rectH / 2, rectW, rectH);
-                    ctx.fillStyle = color;
-                    ctx.fill();
-                    ctx.strokeStyle = stroke;
-                    ctx.stroke();
-
-                    if (iconType === "TankDestroyer") {
-                        // 1. Anti-Tank Triangle (Touching Top Centre, Bottom Corners)
-                        ctx.beginPath();
-                        ctx.moveTo(0, -rectH / 2);          // Top Centre
-                        ctx.lineTo(rectW / 2, rectH / 2);   // Bottom Right
-                        ctx.lineTo(-rectW / 2, rectH / 2);  // Bottom Left
-                        ctx.closePath();
-                        ctx.strokeStyle = '#000000';
-                        ctx.stroke();
-
-                        // 2. Armor Stadium
-                        const armW = (size * 0.8 * 1.2) - (2 * markerScale);
-                        const armH = (size * 0.8 * 0.7) - (2 * markerScale);
-                        const armR = armH / 2;
-                        const armL = armW - 2 * armR;
-
-                        ctx.beginPath();
-                        ctx.moveTo(-armL / 2, -armH / 2);
-                        ctx.lineTo(armL / 2, -armH / 2);
-                        ctx.arc(armL / 2, 0, armR, -Math.PI / 2, Math.PI / 2);
-                        ctx.lineTo(-armL / 2, armH / 2);
-                        ctx.arc(-armL / 2, 0, armR, Math.PI / 2, 3 * Math.PI / 2);
-                        ctx.stroke();
-
-                        // 3. IFV Vertical Line (Left)
-                        ctx.beginPath();
-                        ctx.moveTo(-armW / 2, -rectH / 2);
-                        ctx.lineTo(-armW / 2, rectH / 2);
-                        ctx.stroke();
-                        ctx.stroke();
-                    } else if (iconType === "SPAA-SAM") {
-                        // 1. Dome Base at the Bottom
-                        ctx.beginPath();
-                        ctx.save();
-                        ctx.translate(0, rectH * 0.48); // Moved back to original bottom
-                        ctx.scale(1, 0.35);
-                        ctx.arc(0, 0, rectW * 0.48, Math.PI, 0, false);
-                        ctx.restore();
-                        ctx.stroke();
-
-                        // 2. Missile Symbol sitting on top of the dome
-                        const mW = rectW * 0.18; // Smaller width
-                        const mH = rectH * 0.65; // Smaller height
-                        const missileBottomY = (rectH * 0.3) - (2 * markerScale); // Moved 2px up
-                        ctx.beginPath();
-                        ctx.save();
-                        ctx.translate(0, missileBottomY - mH / 2);
-                        // Vertical shaft
-                        ctx.moveTo(0, mH / 2);
-                        ctx.lineTo(0, -mH / 2);
-                        // Warhead/Triangular head
-                        ctx.moveTo(-mW / 2, mH / 2);
-                        ctx.lineTo(-mW / 2, -mH / 10); // Body side
-                        ctx.lineTo(0, -mH / 2);        // Point
-                        ctx.lineTo(mW / 2, -mH / 10);  // Body side
-                        ctx.lineTo(mW / 2, mH / 2);
-                        ctx.restore();
-                        ctx.stroke();
-                        ctx.stroke();
-                    } else if (iconType === "AAA") {
-                        // AAA: Dome + Capsule + Vertical Line
-                        // 1. Dome at bottom (same level as SAM)
-                        const domeY = rectH * 0.48; // Same as SAM site
-                        ctx.beginPath();
-                        ctx.save();
-                        ctx.translate(0, domeY);
-                        ctx.scale(1, 0.35);
-                        ctx.arc(0, 0, rectW * 0.48, Math.PI, 0, false);
-                        ctx.restore();
-                        ctx.stroke();
-
-                        // 2. Capsule sitting ABOVE dome (larger)
-                        const armW = (size * 0.8 * 1.2) - (2 * markerScale); // Increased from 1.0
-                        const armH = (size * 0.8 * 0.7) - (2 * markerScale); // Increased from 0.5
-                        const armR = armH / 2;
-                        const armL = armW - 2 * armR;
-                        const capsuleY = domeY - (rectW * 0.48 * 0.35) - armH / 2; // Bottom of capsule touches top of dome
-
-                        ctx.beginPath();
-                        ctx.save();
-                        ctx.translate(0, capsuleY);
-                        ctx.moveTo(-armL / 2, -armH / 2);
-                        ctx.lineTo(armL / 2, -armH / 2);
-                        ctx.arc(armL / 2, 0, armR, -Math.PI / 2, Math.PI / 2);
-                        ctx.lineTo(-armL / 2, armH / 2);
-                        ctx.arc(-armL / 2, 0, armR, Math.PI / 2, 3 * Math.PI / 2);
-                        ctx.restore();
-                        ctx.stroke();
-
-                        // 3. Vertical line from top to bottom (extended)
-                        ctx.beginPath();
-                        ctx.moveTo(-armW / 2, -rectH / 2 - 2 * markerScale); // Top of rectangle - 2px
-                        ctx.lineTo(-armW / 2, rectH / 2 + 2 * markerScale); // Bottom of rectangle + 2px
-                        ctx.stroke();
-                    } else if (iconType === "Armored") {
-                        // Armored: Capsule only (no cross or line)
-                        const armW = (size * 0.8 * 1.2) - (2 * markerScale);
-                        const armH = (size * 0.8 * 0.7) - (2 * markerScale);
-                        const armR = armH / 2;
-                        const armL = armW - 2 * armR;
-
-                        ctx.beginPath();
-                        ctx.moveTo(-armL / 2, -armH / 2);
-                        ctx.lineTo(armL / 2, -armH / 2);
-                        ctx.arc(armL / 2, 0, armR, -Math.PI / 2, Math.PI / 2);
-                        ctx.lineTo(-armL / 2, armH / 2);
-                        ctx.arc(-armL / 2, 0, armR, Math.PI / 2, 3 * Math.PI / 2);
-                        ctx.stroke();
-                    } else if (iconType === "Infantry") {
-                        // Infantry: X only (no capsule)
-                        const xW = rectW * 0.9;
-                        const xH = rectH * 0.9;
-                        ctx.beginPath();
-                        ctx.moveTo(-xW / 2, -xH / 2); ctx.lineTo(xW / 2, xH / 2);
-                        ctx.moveTo(-xW / 2, xH / 2); ctx.lineTo(xW / 2, -xH / 2);
-                        ctx.stroke();
-                    } else {
-                        // Default: Combined Arms (Mechanized)
-                        const armW = (size * 0.8 * 1.2) - (2 * markerScale);
-                        const armH = (size * 0.8 * 0.7) - (2 * markerScale);
-                        const armR = armH / 2;
-                        const armL = armW - 2 * armR;
-
-                        ctx.beginPath();
-                        ctx.moveTo(-armL / 2, -armH / 2);
-                        ctx.lineTo(armL / 2, -armH / 2);
-                        ctx.arc(armL / 2, 0, armR, -Math.PI / 2, Math.PI / 2);
-                        ctx.lineTo(-armL / 2, armH / 2);
-                        ctx.arc(-armL / 2, 0, armR, Math.PI / 2, 3 * Math.PI / 2);
-                        ctx.stroke();
-
-                        const xW = rectW / 2;
-                        const xH = rectH / 2;
-                        ctx.beginPath();
-                        ctx.moveTo(-xW, -xH); ctx.lineTo(xW, xH);
-                        ctx.moveTo(-xW, xH); ctx.lineTo(xW, -xH);
-                        ctx.stroke();
-
-                        ctx.beginPath();
-                        ctx.moveTo(-armW / 2, -rectH / 2);
-                        ctx.lineTo(-armW / 2, rectH / 2);
-                        ctx.stroke();
-                    }
-                }
-
-                if (isReinforced) {
-                    // Draw (+) symbol at top right, aligned with Unit Size dots and Shape Diagonal
-                    // Placed at the "virtual corner" of the bounding box
-
-                    // User Request: 2px closer for Rect (Friendly), 10px closer for Diamond (Hostile)
-                    // Previous baseline was 8. 
-                    // Friendly: 8 - 2 = 6.
-                    // Hostile: 8 - 10 = -2.
-                    const offset = isFriendly ? 6 * markerScale : -2 * markerScale;
-
-                    const plusY = markerTop - offset;
-                    // Friendly: Right edge of Rect. Hostile: Right edge of Bounding Box (dSize)
-                    const plusX = isFriendly ? (rectW / 2 + offset) : (dSize + offset);
-
-                    const plusSize = 10 * markerScale;
-
-                    ctx.lineWidth = 2 * markerScale;
-                    ctx.strokeStyle = '#000000';
-                    ctx.beginPath();
-                    // Horizontal
-                    ctx.moveTo(plusX - plusSize / 2, plusY);
-                    ctx.lineTo(plusX + plusSize / 2, plusY);
-                    // Vertical
-                    ctx.moveTo(plusX, plusY - plusSize / 2);
-                    ctx.lineTo(plusX, plusY + plusSize / 2);
-                    ctx.stroke();
-                }
-
-                if (dots > 0) {
-                    ctx.fillStyle = '#000000';
-                    const dotSize = 6 * markerScale; // Reduced size
-                    const gap = 3 * markerScale; // Fixed gap between dots
-                    const totalW = dots * dotSize + (dots - 1) * gap;
-                    let startX = -totalW / 2 + dotSize / 2;
-                    const offsetFromTop = 4 * markerScale; // Fixed offset from icon top
-                    const yPos = markerTop - offsetFromTop - (dotSize / 2);
-
-                    for (let i = 0; i < dots; i++) {
-                        ctx.beginPath();
-                        ctx.arc(startX + i * (dotSize + gap), yPos, dotSize / 2, 0, Math.PI * 2);
-                        ctx.fill();
-                    }
-                }
-                ctx.restore();
-            }
-
-            // 1. Draw Airfields - Moved to Step 4 (After Ground Units)
-
-            function drawLegend(ctx) {
-                if (!showLegend) return;
-
-                const items = [
-                    { type: "SPAA-SAM", label: "SAM" }, // Airfield Defense
-                    { type: "AAA", label: "AAA" }, // Generic Anti-Air
-                    { type: "TankDestroyer", label: "AT" },
-                    { type: "Armored", label: "ARMOR" },
-                    { type: "Mechanized", label: "MECH" },
-                    { type: "Infantry", label: "INF" }
-                ];
-
-                const gap = 30 * markerScale; // Gap between items
-                const iconAreaW = 50 * markerScale; // Width reserved for dual icons (Red + Blue)
-                const padding = 20 * markerScale;
-
-                // 1. Calculate Sizes
-                ctx.font = `bold ${14 * markerScale}px Arial`;
-                let totalContentW = 0;
-                let itemWidths = [];
-
-                items.forEach((item, i) => {
-                    const textW = ctx.measureText(item.label).width;
-                    const itemW = iconAreaW + textW;
-                    itemWidths.push(itemW);
-                    totalContentW += itemW;
-                    if (i < items.length - 1) totalContentW += gap;
-                });
-
-                const boxW = totalContentW + (padding * 2);
-                const boxH = 70 * markerScale;
-                const startX = 15;
-                const startY = (canvas.height / dpr) - boxH - 15;
-
-                ctx.save();
-                ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-                // Background
-                ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
                 ctx.beginPath();
-                if (ctx.roundRect) {
-                    ctx.roundRect(startX, startY, boxW, boxH, 8 * markerScale);
-                } else {
-                    ctx.rect(startX, startY, boxW, boxH);
-                }
+                ctx.rect(-rectW / 2, -rectH / 2, rectW, rectH);
+                ctx.fillStyle = '#7ee2ff'; // Friendly Blue (Pastel)
                 ctx.fill();
-                ctx.strokeStyle = "rgba(255, 255, 255, 0.2)";
-                ctx.lineWidth = 1;
+                ctx.strokeStyle = '#000000'; // Black Outline
                 ctx.stroke();
 
-                // Draw Items
-                let currentX = startX + padding;
-                const yTop = startY + boxH * 0.35;
-                const yBottom = startY + boxH * 0.65;
+                // Installation Marker: Black RECTANGLE on top of Rectangle
+                // "make the black retanlge for installtion smaller"
+                const instW = rectW * 0.4; // Slightly increased
+                const instH = size * 0.2;
+                ctx.fillStyle = '#000000';
+                // Positioned centrally above the top edge (-rectH/2)
+                ctx.fillRect(-instW / 2, -rectH / 2 - instH, instW, instH);
 
-                items.forEach((item, i) => {
-                    const itemW = itemWidths[i];
-
-                    // Icon Positions
-                    drawNATOIcon(ctx, currentX + 10 * markerScale, yTop, 20 * markerScale, "#ff7e7e", false, 0, item.type);
-                    drawNATOIcon(ctx, currentX + 34 * markerScale, yBottom, 20 * markerScale, "#7ee2ff", true, 0, item.type);
-
-                    // Label
-                    ctx.fillStyle = "#FFFFFF";
-                    ctx.font = `bold ${14 * markerScale}px Arial`;
-                    ctx.textAlign = "left";
-                    ctx.textBaseline = "middle";
-                    // Label starts after icon area
-                    ctx.fillText(item.label, currentX + iconAreaW, startY + boxH / 2);
-
-                    // Advance X
-                    currentX += itemW + gap;
-                });
-
-                ctx.restore();
-            }
-
-            function getNATOType(cluster) {
-                const icons = cluster.units.map(u => u.icon || "");
-
-                // Dominant Type Logic
-                let counts = {
-                    "Armored": 0,       // Medium/Heavy Tank
-                    "Mechanized": 0,    // Light Tank/IFV/APC
-                    "Infantry": 0,      // Ground / Infantry
-                    "TankDestroyer": 0, // ATGM / TD
-                    "AAA": 0            // SPAA / Generic AA (NOT airfield defense)
-                };
-
-                icons.forEach(i => {
-                    const s = i.toLowerCase();
-                    if (s.includes("mediumtank") || s.includes("medium_tank") || s.includes("heavytank")) {
-                        counts["Armored"]++;
-                    } else if (s.includes("lighttank") || s.includes("light_tank") || s.includes("ifv") || s.includes("apc")) {
-                        counts["Mechanized"]++;
-                    } else if (s.includes("ground") || s.includes("infantry")) {
-                        counts["Infantry"]++;
-                    } else if (s.includes("tankdestroyer") || s.includes("tank_destroyer") || s === "td") {
-                        counts["TankDestroyer"]++;
-                    } else if (s.includes("spaa") || s.includes("sam")) {
-                        counts["AAA"]++;
-                    }
-                });
-
-                // Find type with max count
-                let maxType = "Mechanized"; // Default
-                let maxCount = 0;
-
-                for (const [type, count] of Object.entries(counts)) {
-                    if (count > maxCount) {
-                        maxCount = count;
-                        maxType = type;
-                    }
-                }
-
-                // Tie-breaker: If Armored and Mechanized have equal counts, prioritize Mechanized
-                if (maxType === "Armored" && counts["Mechanized"] === maxCount) {
-                    maxType = "Mechanized";
-                }
-
-                // Priority 1: Airfield Defense (Only if dominant type is AAA)
-                if (maxType === "AAA" && lastData.airfields && lastData.airfields.length > 0) {
-                    let nearestAF = null;
-                    let minDist = 0.03; // Very tight threshold - only SPAAs at AF center
-                    lastData.airfields.forEach(af => {
-                        const dx = af.x - cluster.x;
-                        const dy = af.y - cluster.y;
-                        const d = Math.sqrt(dx * dx + dy * dy);
-                        if (d < minDist) {
-                            minDist = d;
-                            nearestAF = af;
-                        }
-                    });
-                    if (nearestAF) return { type: "SPAA-SAM", af: nearestAF };
-                }
-
-                // Check for Reinforced Unit (3 or more distinct types)
-                let distinctTypes = 0;
-                for (const count of Object.values(counts)) {
-                    if (count > 0) distinctTypes++;
-                }
-                const isReinforced = distinctTypes >= 3;
-
-                return { type: maxType, dominantCount: maxCount, isReinforced: isReinforced };
-            }
-
-            if (lastData.objectives && lastData.objectives.length > 0) {
-                lastData.objectives.forEach(obj => {
-                    const [sx, sy] = worldToScreen(obj.x, obj.y);
-                    const color = obj.color || '#FF0000';
-                    const size = 26 * markerScale; // Increased NATO size
-
-                    ctx.save();
-                    ctx.translate(sx, sy);
-                    ctx.lineWidth = 1 * markerScale;
-
-                    if (obj.type === 'bombing_point') {
-                        // NATO Hostile / Target: Red Diamond
-                        // Scaled to 0.8 to visually match the weight of the rectangle
-                        const dSize = size * 0.8;
-
-                        // 1. Installation Marker: Black SQUARE (Draw FIRST so it is BEHIND)
-                        // "make the black retanlge for installtion smaller, black sqarure bigger"
-                        const sqSize = size * 0.5; // Increased from 0.4
-                        ctx.fillStyle = '#000000';
-                        // Center of square = (0, -dSize)
-                        // Top-Left = (-sqSize/2, -dSize - sqSize/2)
-                        ctx.fillRect(-sqSize / 2, -dSize - sqSize / 2, sqSize, sqSize);
-
-                        ctx.beginPath();
-                        ctx.moveTo(0, -dSize);    // Top
-                        ctx.lineTo(dSize, 0);     // Right
-                        ctx.lineTo(0, dSize);     // Bottom
-                        ctx.lineTo(-dSize, 0);    // Left
-                        ctx.closePath();
-
-                        ctx.fillStyle = '#ff7e7e'; // Hostile Red (Pastel)
-                        ctx.fill();
-                        ctx.strokeStyle = '#000000'; // Black Outline
-                        ctx.stroke();
-
-                        // Installation label inside diamond
-                        const label = getInstallationLabel(obj);
-                        const lines = label.split('\n');
-                        ctx.fillStyle = '#000000';
-                        ctx.font = `bold ${8 * markerScale}px Arial`;
-                        ctx.textAlign = 'center';
-                        ctx.textBaseline = 'middle';
-                        const lineHeight = 9 * markerScale;
-                        const startY = -(lines.length - 1) * lineHeight / 2;
-                        lines.forEach((line, i) => {
-                            ctx.fillText(line, 0, startY + i * lineHeight);
-                        });
-
-                    } else if (obj.type === 'defending_point') {
-                        // NATO Friendly: Blue Rectangle
-                        const rectW = size * 1.5;
-                        const rectH = size * 1.0;
-
-                        ctx.beginPath();
-                        ctx.rect(-rectW / 2, -rectH / 2, rectW, rectH);
-                        ctx.fillStyle = '#7ee2ff'; // Friendly Blue (Pastel)
-                        ctx.fill();
-                        ctx.strokeStyle = '#000000'; // Black Outline
-                        ctx.stroke();
-
-                        // Installation Marker: Black RECTANGLE on top of Rectangle
-                        // "make the black retanlge for installtion smaller"
-                        const instW = rectW * 0.4; // Slightly increased
-                        const instH = size * 0.2;
-                        ctx.fillStyle = '#000000';
-                        // Positioned centrally above the top edge (-rectH/2)
-                        ctx.fillRect(-instW / 2, -rectH / 2 - instH, instW, instH);
-
-                        // Installation label inside rectangle
-                        const label = getInstallationLabel(obj);
-                        const lines = label.split('\n');
-                        ctx.fillStyle = '#000000';
-                        ctx.font = `bold ${8 * markerScale}px Arial`;
-                        ctx.textAlign = 'center';
-                        ctx.textBaseline = 'middle';
-                        const lineHeight = 9 * markerScale;
-                        const startY = -(lines.length - 1) * lineHeight / 2;
-                        lines.forEach((line, i) => {
-                            ctx.fillText(line, 0, startY + i * lineHeight);
-                        });
-                    }
-
-                    ctx.restore();
+                // Installation label inside rectangle
+                const label = getInstallationLabel(obj);
+                const lines = label.split('\n');
+                ctx.fillStyle = '#000000';
+                ctx.font = `bold ${8 * markerScale}px Arial`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                const lineHeight = 9 * markerScale;
+                const startY = -(lines.length - 1) * lineHeight / 2;
+                lines.forEach((line, i) => {
+                    ctx.fillText(line, 0, startY + i * lineHeight);
                 });
             }
 
-            // 3. Draw Ground Units (Clustered) - BEFORE Players/POIs
-            let clusters = []; // Define outside to allow panel update even if empty
+            ctx.restore();
+        });
+    }
 
-            if (lastData.ground_units && lastData.ground_units.length > 0) {
-                // Separate Naval Units from Ground Units
-                const groundUnits = [];
-                const navalUnits = [];
+    // 3. Draw Ground Units (Clustered) - BEFORE Players/POIs
+    let clusters = []; // Define outside to allow panel update even if empty
 
-                lastData.ground_units.forEach(u => {
-                    const icon = (u.icon || "").toLowerCase();
-                    if (icon === "torpedoboat" || icon === "boat" || icon === "ship") {
-                        navalUnits.push(u);
-                    } else {
-                        groundUnits.push(u);
-                    }
-                });
+    if (lastData.ground_units && lastData.ground_units.length > 0) {
+        // Separate Naval Units from Ground Units
+        const groundUnits = [];
+        const navalUnits = [];
 
-                // CLUSTER NAVAL UNITS
-                const navalClusters = [];
-                const navalThreshold = 0.05;
-
-                navalUnits.forEach(unit => {
-                    let added = false;
-                    const isUnitFriendly = isFriendlyColor(unit.color);
-
-                    for (let c of navalClusters) {
-                        const isClusterFriendly = isFriendlyColor(c.units[0].color);
-                        if (isUnitFriendly !== isClusterFriendly) continue;
-
-                        const dist = Math.sqrt((unit.x - c.x) ** 2 + (unit.y - c.y) ** 2);
-                        if (dist < navalThreshold) {
-                            c.units.push(unit);
-                            // Update centroid
-                            c.x = (c.x * (c.units.length - 1) + unit.x) / c.units.length;
-                            c.y = (c.y * (c.units.length - 1) + unit.y) / c.units.length;
-                            added = true;
-                            break;
-                        }
-                    }
-                    if (!added) {
-                        navalClusters.push({ x: unit.x, y: unit.y, units: [unit], type: unit.icon, color: unit.color });
-                    }
-                });
-
-                // DRAW NAVAL CLUSTERS
-                navalClusters.forEach(cluster => {
-                    const [sx, sy] = worldToScreen(cluster.x, cluster.y);
-                    const isFriendly = isFriendlyColor(cluster.units[0].color);
-                    const color = isFriendly ? '#7ee2ff' : '#ff7e7e';
-                    drawNavalIcon(ctx, sx, sy, 24 * markerScale, color, isFriendly, cluster.type, cluster.units.length);
-                });
-
-                // CLUSTER GROUND UNITS
-                // clusters array is already defined outside
-                const threshold = 0.05; // Cluster distance threshold
-
-                groundUnits.forEach(unit => {
-                    let added = false;
-                    const isUnitFriendly = isFriendlyColor(unit.color);
-
-                    for (let c of clusters) {
-                        const isClusterFriendly = isFriendlyColor(c.units[0].color);
-
-                        if (isUnitFriendly !== isClusterFriendly) continue; // Separate by team
-
-                        // Check distance to cluster centroid
-                        const dist = Math.sqrt((unit.x - c.x) ** 2 + (unit.y - c.y) ** 2);
-                        if (dist < threshold) {
-                            c.units.push(unit);
-                            // Update centroid (simple average)
-                            c.x = (c.x * (c.units.length - 1) + unit.x) / c.units.length;
-                            c.y = (c.y * (c.units.length - 1) + unit.y) / c.units.length;
-                            added = true;
-                            break;
-                        }
-                    }
-                    if (!added) {
-                        clusters.push({ x: unit.x, y: unit.y, units: [unit], type: unit.icon });
-                    }
-                });
+        lastData.ground_units.forEach(u => {
+            const icon = (u.icon || "").toLowerCase();
+            if (icon === "torpedoboat" || icon === "boat" || icon === "ship") {
+                navalUnits.push(u);
+            } else {
+                groundUnits.push(u);
             }
+        });
 
-            // Update Convoy Info Panel (ALWAYS run this, even if clusters is empty)
-            if (showConvoyInfo) {
-                if (clusters.length === 0) {
-                    convoyPanel.innerHTML = "<div style='padding:10px; color:#aaa; text-align:center;'>No active convoys detected.</div>";
-                } else {
-                    let html = "";
-                    clusters.forEach((c, idx) => {
-                        const isFriendly = isFriendlyColor(c.units[0].color);
-                        const teamColor = isFriendly ? '#7ee2ff' : '#ff7e7e';
-                        const teamName = isFriendly ? 'FRIENDLY' : 'HOSTILE';
+        // CLUSTER NAVAL UNITS
+        const navalClusters = [];
+        const navalThreshold = 0.05;
 
-                        const vehicleTypes = {};
-                        c.units.forEach(u => {
-                            const icon = u.icon || 'Unknown';
-                            vehicleTypes[icon] = (vehicleTypes[icon] || 0) + 1;
-                        });
-                        const composition = Object.entries(vehicleTypes)
-                            .map(([type, count]) => `${count}x ${type}`)
-                            .join(', ');
+        navalUnits.forEach(unit => {
+            let added = false;
+            const isUnitFriendly = isFriendlyColor(unit.color);
 
-                        html += `
+            for (let c of navalClusters) {
+                const isClusterFriendly = isFriendlyColor(c.units[0].color);
+                if (isUnitFriendly !== isClusterFriendly) continue;
+
+                const dist = Math.sqrt((unit.x - c.x) ** 2 + (unit.y - c.y) ** 2);
+                if (dist < navalThreshold) {
+                    c.units.push(unit);
+                    // Update centroid
+                    c.x = (c.x * (c.units.length - 1) + unit.x) / c.units.length;
+                    c.y = (c.y * (c.units.length - 1) + unit.y) / c.units.length;
+                    added = true;
+                    break;
+                }
+            }
+            if (!added) {
+                navalClusters.push({ x: unit.x, y: unit.y, units: [unit], type: unit.icon, color: unit.color });
+            }
+        });
+
+        // DRAW NAVAL CLUSTERS
+        navalClusters.forEach(cluster => {
+            const [sx, sy] = worldToScreen(cluster.x, cluster.y);
+            const isFriendly = isFriendlyColor(cluster.units[0].color);
+            const color = isFriendly ? '#7ee2ff' : '#ff7e7e';
+            drawNavalIcon(ctx, sx, sy, 24 * markerScale, color, isFriendly, cluster.type, cluster.units.length);
+        });
+
+        // CLUSTER GROUND UNITS
+        // clusters array is already defined outside
+        const threshold = 0.05; // Cluster distance threshold
+
+        groundUnits.forEach(unit => {
+            let added = false;
+            const isUnitFriendly = isFriendlyColor(unit.color);
+
+            for (let c of clusters) {
+                const isClusterFriendly = isFriendlyColor(c.units[0].color);
+
+                if (isUnitFriendly !== isClusterFriendly) continue; // Separate by team
+
+                // Check distance to cluster centroid
+                const dist = Math.sqrt((unit.x - c.x) ** 2 + (unit.y - c.y) ** 2);
+                if (dist < threshold) {
+                    c.units.push(unit);
+                    // Update centroid (simple average)
+                    c.x = (c.x * (c.units.length - 1) + unit.x) / c.units.length;
+                    c.y = (c.y * (c.units.length - 1) + unit.y) / c.units.length;
+                    added = true;
+                    break;
+                }
+            }
+            if (!added) {
+                clusters.push({ x: unit.x, y: unit.y, units: [unit], type: unit.icon });
+            }
+        });
+    }
+
+    // Update Convoy Info Panel (ALWAYS run this, even if clusters is empty)
+    if (showConvoyInfo) {
+        if (clusters.length === 0) {
+            convoyPanel.innerHTML = "<div style='padding:10px; color:#aaa; text-align:center;'>No active convoys detected.</div>";
+        } else {
+            let html = "";
+            clusters.forEach((c, idx) => {
+                const isFriendly = isFriendlyColor(c.units[0].color);
+                const teamColor = isFriendly ? '#7ee2ff' : '#ff7e7e';
+                const teamName = isFriendly ? 'FRIENDLY' : 'HOSTILE';
+
+                const vehicleTypes = {};
+                c.units.forEach(u => {
+                    const icon = u.icon || 'Unknown';
+                    vehicleTypes[icon] = (vehicleTypes[icon] || 0) + 1;
+                });
+                const composition = Object.entries(vehicleTypes)
+                    .map(([type, count]) => `${count}x ${type}`)
+                    .join(', ');
+
+                html += `
                             <div class="convoy-item">
                                 <div class="convoy-header" style="color: ${teamColor}">
                                     Convoy #${idx + 1} (${teamName}) - ${c.units.length} Units
@@ -2470,1304 +2572,1304 @@
                                 <div class="convoy-detail">${composition}</div>
                             </div>
                         `;
-                    });
-                    convoyPanel.innerHTML = html;
+            });
+            convoyPanel.innerHTML = html;
+        }
+    }
+
+    // Draw Clusters (if any)
+    if (clusters.length > 0) {
+        clusters.forEach((c, idx) => {
+            // if (engagedIndices.has(idx)) return; // Removed FEBA logic
+
+            const nato = getNATOType(c);
+            const isFriendly = isFriendlyColor(c.units[0].color);
+            // Use unified light blue for friendly ground AND naval
+            const color = isFriendly ? '#7ee2ff' : '#ff7e7e';
+            const count = c.units.length;
+
+            // Calculate world position with offset for AF SAMs
+            let worldX = c.x;
+            let worldY = c.y;
+
+            // Apply Situational Offset for Airfield AA in world coordinates
+            if (nato.type === "SPAA-SAM" && nato.af) {
+                // Calculate map center in world coordinates
+                const mapCenterX = (mapMin[0] + mapMax[0]) / 2;
+                const mapCenterY = (mapMin[1] + mapMax[1]) / 2;
+
+                // Direction from map center to airfield
+                let dx = nato.af.x - mapCenterX;
+                let dy = nato.af.y - mapCenterY;
+
+                // Snap to cardinal direction and place SAM on far side
+                const offsetDist = 0.04; // World-space offset distance (closer to AF)
+
+                // Note: In War Thunder, Y increases southward
+                if (Math.abs(dx) > Math.abs(dy)) {
+                    // East/West dominant - place SAM on the side away from center
+                    worldX = nato.af.x + (dx > 0 ? offsetDist : -offsetDist);
+                    worldY = nato.af.y;
+                } else {
+                    // North/South dominant - place SAM on the side away from center
+                    // Y increases southward, so positive dy = south, negative dy = north
+                    worldX = nato.af.x;
+                    worldY = nato.af.y + (dy > 0 ? offsetDist : -offsetDist);
                 }
             }
 
-            // Draw Clusters (if any)
-            if (clusters.length > 0) {
-                clusters.forEach((c, idx) => {
-                    // if (engagedIndices.has(idx)) return; // Removed FEBA logic
+            // Transform to screen coordinates
+            const [sx, sy] = worldToScreen(worldX, worldY);
+            const size = 26 * markerScale;
 
-                    const nato = getNATOType(c);
-                    const isFriendly = isFriendlyColor(c.units[0].color);
-                    // Use unified light blue for friendly ground AND naval
-                    const color = isFriendly ? '#7ee2ff' : '#ff7e7e';
-                    const count = c.units.length;
+            // Size indicators based on dominant vehicle type count
+            // 1 = unit (1 dot), 2 = section (2 dots), 3-4 = platoon (3 dots), >=5 = company (1 vertical line)
+            let dots = 0;
+            let showCompanyLine = false;
+            const dominantCount = nato.dominantCount || 1; // Default to 1 if not set
 
-                    // Calculate world position with offset for AF SAMs
-                    let worldX = c.x;
-                    let worldY = c.y;
-
-                    // Apply Situational Offset for Airfield AA in world coordinates
-                    if (nato.type === "SPAA-SAM" && nato.af) {
-                        // Calculate map center in world coordinates
-                        const mapCenterX = (mapMin[0] + mapMax[0]) / 2;
-                        const mapCenterY = (mapMin[1] + mapMax[1]) / 2;
-
-                        // Direction from map center to airfield
-                        let dx = nato.af.x - mapCenterX;
-                        let dy = nato.af.y - mapCenterY;
-
-                        // Snap to cardinal direction and place SAM on far side
-                        const offsetDist = 0.04; // World-space offset distance (closer to AF)
-
-                        // Note: In War Thunder, Y increases southward
-                        if (Math.abs(dx) > Math.abs(dy)) {
-                            // East/West dominant - place SAM on the side away from center
-                            worldX = nato.af.x + (dx > 0 ? offsetDist : -offsetDist);
-                            worldY = nato.af.y;
-                        } else {
-                            // North/South dominant - place SAM on the side away from center
-                            // Y increases southward, so positive dy = south, negative dy = north
-                            worldX = nato.af.x;
-                            worldY = nato.af.y + (dy > 0 ? offsetDist : -offsetDist);
-                        }
-                    }
-
-                    // Transform to screen coordinates
-                    const [sx, sy] = worldToScreen(worldX, worldY);
-                    const size = 26 * markerScale;
-
-                    // Size indicators based on dominant vehicle type count
-                    // 1 = unit (1 dot), 2 = section (2 dots), 3-4 = platoon (3 dots), >=5 = company (1 vertical line)
-                    let dots = 0;
-                    let showCompanyLine = false;
-                    const dominantCount = nato.dominantCount || 1; // Default to 1 if not set
-
-                    if (count === 1) {
-                        dots = 1; // Single vehicle
-                    } else if (dominantCount === 2) {
-                        dots = 2; // Section
-                    } else if (dominantCount >= 3 && dominantCount <= 4) {
-                        dots = 3; // Platoon
-                    } else if (dominantCount >= 5) {
-                        showCompanyLine = true; // Company
-                    }
-
-                    drawNATOIcon(ctx, sx, sy, size, color, isFriendly, dots, nato.type, nato.af, nato.isReinforced);
-
-                    // --- Draw 4.5km Radius Circle for SPAA Convoys ---
-                    // Check if cluster contains SPAA (anti-aircraft) units
-                    // Skip if this is an airfield SAM (nato.af exists) - airfields already have 12km circle
-                    const hasSpaa = nato.type === "SPAA-SAM" ||
-                        c.units.some(u => (u.icon || "").toLowerCase().includes("aa") ||
-                            (u.icon || "").toLowerCase().includes("spaa"));
-                    const isAirfieldSam = nato.af !== null && nato.af !== undefined;
-
-                    if (hasSpaa && worldWidth > 0 && !isAirfieldSam) {
-                        // 4.5km radius in normalized coordinates
-                        const radiusNorm = 4500 / worldWidth;
-                        const radiusPixels = radiusNorm * mapDrawW;
-
-                        ctx.save();
-                        ctx.translate(sx, sy);
-                        ctx.beginPath();
-                        ctx.arc(0, 0, radiusPixels, 0, 2 * Math.PI);
-                        ctx.strokeStyle = isFriendly ? 'rgba(126, 226, 255, 0.6)' : 'rgba(255, 126, 126, 0.6)';
-                        ctx.setLineDash([8, 4]); // Dashed line
-                        ctx.lineWidth = 3 * markerScale;
-                        ctx.stroke();
-                        ctx.setLineDash([]); // Reset dash
-                        ctx.restore();
-                    }
-
-                    // Draw company line if needed (detached from frame)
-                    if (showCompanyLine) {
-                        ctx.save();
-                        ctx.translate(sx, sy);
-                        ctx.strokeStyle = '#000000';
-                        ctx.lineWidth = 2 * markerScale;
-                        const lineHeight = 10 * markerScale; // Fixed height
-                        const markerTop = isFriendly ? -(size * 1.0) / 2 : -size * 0.8;
-                        const offsetFromTop = 4 * markerScale; // Same offset as dots
-                        const yPos = markerTop - offsetFromTop - lineHeight / 2;
-                        ctx.beginPath();
-                        ctx.moveTo(0, yPos - lineHeight / 2);
-                        ctx.lineTo(0, yPos + lineHeight / 2);
-                        ctx.stroke();
-                        ctx.restore();
-                    }
-
-                    // DRAW CONVOY NUMBER (If Info Panel is enabled)
-                    if (showConvoyInfo) {
-                        ctx.save();
-                        ctx.translate(sx, sy);
-                        ctx.fillStyle = '#FFFFFF';
-                        ctx.strokeStyle = '#000000';
-                        ctx.lineWidth = 3;
-                        ctx.font = `bold ${14 * markerScale}px Arial`;
-                        ctx.textAlign = 'center';
-                        ctx.textBaseline = 'top'; // Draw below the icon
-
-                        // Calculate position below the icon
-                        // Icon height is roughly 'size'.
-                        const yOffset = (size / 2) + (5 * markerScale);
-                        const label = `#${idx + 1}`;
-
-                        ctx.strokeText(label, 0, yOffset);
-                        ctx.fillText(label, 0, yOffset);
-                        ctx.restore();
-                    }
-                });
-
+            if (count === 1) {
+                dots = 1; // Single vehicle
+            } else if (dominantCount === 2) {
+                dots = 2; // Section
+            } else if (dominantCount >= 3 && dominantCount <= 4) {
+                dots = 3; // Platoon
+            } else if (dominantCount >= 5) {
+                showCompanyLine = true; // Company
             }
 
-            // 4. Draw Airfields - Moved Here (After Ground Units)
-            if (lastData.airfields && lastData.airfields.length > 0) {
-                // Pre-process for de-cluttering (Hide tags if overlapping)
-                const afRenderItems = lastData.airfields.map((af, idx) => {
-                    const [sx, sy] = worldToScreen(af.x, af.y);
-                    // CVs have higher priority (2) than generic Airfields (1)
-                    // Add original index for stable sort
-                    return { af, sx, sy, priority: af.is_cv ? 2 : 1, idx, hideTags: false };
-                });
+            drawNATOIcon(ctx, sx, sy, size, color, isFriendly, dots, nato.type, nato.af, nato.isReinforced);
 
-                // Stable sort: Primary by priority DESC, secondary by original index ASC
-                afRenderItems.sort((a, b) => {
-                    if (b.priority !== a.priority) return b.priority - a.priority;
-                    return a.idx - b.idx; // Maintain original order for equal priority
-                });
+            // --- Draw 4.5km Radius Circle for SPAA Convoys ---
+            // Check if cluster contains SPAA (anti-aircraft) units
+            // Skip if this is an airfield SAM (nato.af exists) - airfields already have 12km circle
+            const hasSpaa = nato.type === "SPAA-SAM" ||
+                c.units.some(u => (u.icon || "").toLowerCase().includes("aa") ||
+                    (u.icon || "").toLowerCase().includes("spaa"));
+            const isAirfieldSam = nato.af !== null && nato.af !== undefined;
 
-                const drawnCenters = [];
-                const clutterThreshold = 45 * markerScale; // Pixels distance to suppress text
+            if (hasSpaa && worldWidth > 0 && !isAirfieldSam) {
+                // 4.5km radius in normalized coordinates
+                const radiusNorm = 4500 / worldWidth;
+                const radiusPixels = radiusNorm * mapDrawW;
 
-                afRenderItems.forEach(item => {
-                    item.hideTags = false; // Use item.hideTags, NOT item.af.hideTags
-                    for (const center of drawnCenters) {
-                        const dist = Math.hypot(item.sx - center.x, item.sy - center.y);
-                        if (dist < clutterThreshold) {
-                            item.hideTags = true;
-                            break;
-                        }
-                    }
-                    if (!item.hideTags) {
-                        drawnCenters.push({ x: item.sx, y: item.sy });
-                    }
-                });
-
-                // PASS 1: Draw ALL runway rectangles first
-                lastData.airfields.forEach(af => {
-                    const [sx, sy] = worldToScreen(af.x, af.y);
-                    ctx.strokeStyle = af.color || '#FFFFFF';
-                    ctx.fillStyle = af.color || '#FFFFFF';
-
-                    // Draw Runway (Rectangle) - ALWAYS DRAW
-                    if (af.angle !== undefined) {
-                        let rad = af.angle * (Math.PI / 180);
-
-                        // Use actual length if available, otherwise default to fixed size
-                        let rectW = 30 * markerScale;
-
-                        // Use Normalized Length if available
-                        if (af.len && af.len > 0.0001) {
-                            // mapDrawW is the full map width in pixels
-                            // af.len is normalized relative to map width
-                            rectW = af.len * mapDrawW;
-
-                            // Scale by 3.0x for CVs (large), 1.0x for regular Airfields
-                            const scaleFactor = af.is_cv ? 3.0 : 1.0;
-                            rectW *= scaleFactor;
-
-                            // Enforce min size for visibility
-                            rectW = Math.max(rectW, 5 * markerScale);
-                        } else {
-                            // If length is missing or tiny (phantom?), skip drawing rect?
-                            // User reported phantom rects. If len is tiny, let's hide it.
-                            if (af.len !== undefined) return; // Explicitly tiny -> Hide
-                        }
-
-                        const rectH = 6 * markerScale;
-
-                        ctx.save();
-                        ctx.translate(sx, sy);
-                        ctx.rotate(rad);
-                        ctx.fillRect(-rectW / 2, -rectH / 2, rectW, rectH);
-                        ctx.strokeStyle = '#000000';
-                        ctx.lineWidth = 1 * markerScale;
-                        ctx.strokeRect(-rectW / 2, -rectH / 2, rectW, rectH);
-                        ctx.restore();
-
-                        // --- Draw 12km Radius Circle for Long Runways (>3000m) ---
-                        // Calculate runway length in meters using worldWidth
-                        const runwayMeters = (af.len || 0) * worldWidth;
-
-                        if (runwayMeters > 3000 && worldWidth > 0) {
-                            // 12km radius in normalized coordinates
-                            const radiusNorm = 12000 / worldWidth;
-                            const radiusPixels = radiusNorm * mapDrawW;
-
-                            ctx.save();
-                            ctx.translate(sx, sy);
-                            ctx.beginPath();
-                            ctx.arc(0, 0, radiusPixels, 0, 2 * Math.PI);
-                            ctx.strokeStyle = af.color || 'rgba(100, 100, 255, 0.5)';
-                            ctx.setLineDash([10, 5]); // Dashed line
-                            ctx.lineWidth = 4 * markerScale;
-                            ctx.globalAlpha = 0.5;
-                            ctx.stroke();
-                            ctx.setLineDash([]); // Reset dash
-                            ctx.globalAlpha = 1.0;
-                            ctx.restore();
-                        }
-                    }
-                });
-
-                // PASS 2: Draw ALL text labels on top of rectangles
-                afRenderItems.forEach(item => {
-                    if (item.hideTags) return; // Skip hidden labels (use item.hideTags)
-
-                    const af = item.af;
-                    const [sx, sy] = worldToScreen(af.x, af.y);
-
-                    // Skip phantom text if phantom rect
-                    if (af.len !== undefined && af.len < 0.0001) return;
-
-                    // Draw Info Text (Bearing / Reciprocal / Length)
-                    if (af.angle !== undefined) {
-                        ctx.save();
-                        ctx.translate(sx, sy);
-                        ctx.fillStyle = '#FFFFFF';
-                        ctx.strokeStyle = '#000000';
-                        ctx.lineWidth = 2 * markerScale;
-                        ctx.font = `bold ${12 * markerScale}px Arial`;
-                        ctx.textAlign = 'center';
-                        ctx.textBaseline = 'top';
-
-                        let bearing = (af.angle + 90);
-                        bearing = (bearing % 360 + 360) % 360;
-                        let recip = (bearing + 180) % 360;
-
-                        let infoText = `${Math.round(recip)}/${Math.round(bearing)}`;
-
-                        if (af.len && af.len > 0.0001) {
-                            const worldW = (lastData.map_info.map_max[0] - lastData.map_info.map_min[0]);
-                            const lenM = Math.round(af.len * worldW);
-                            infoText += ` ${lenM}m`;
-                        }
-
-                        ctx.strokeText(infoText, 0, 18 * markerScale);
-                        ctx.fillText(infoText, 0, 18 * markerScale);
-                        ctx.restore();
-                    }
-
-                    // Draw Label "AF#"/"CV#"
-                    if (af.id) {
-                        ctx.font = `bold ${12 * markerScale}px Arial`;
-                        ctx.fillStyle = '#FFFFFF';
-                        ctx.strokeStyle = '#000000';
-                        ctx.lineWidth = 3 * markerScale;
-                        ctx.textAlign = 'center';
-
-                        const labelPrefix = af.is_cv ? "CV" : "AF";
-                        const label = `${labelPrefix}${af.id}`;
-                        ctx.strokeText(label, sx, sy - 23 * markerScale);
-                        ctx.fillText(label, sx, sy - 23 * markerScale);
-                    }
-                });
+                ctx.save();
+                ctx.translate(sx, sy);
+                ctx.beginPath();
+                ctx.arc(0, 0, radiusPixels, 0, 2 * Math.PI);
+                ctx.strokeStyle = isFriendly ? 'rgba(126, 226, 255, 0.6)' : 'rgba(255, 126, 126, 0.6)';
+                ctx.setLineDash([8, 4]); // Dashed line
+                ctx.lineWidth = 3 * markerScale;
+                ctx.stroke();
+                ctx.setLineDash([]); // Reset dash
+                ctx.restore();
             }
 
-            // 4. Draw POIs (Points of Interest) - AFTER Ground Units
-            if (lastData.pois && lastData.pois.length > 0) {
-                // DEBUG POI
-                if (!window.poiDebugLogged) {
-                    console.log("Drawing POIs:", lastData.pois);
-                    window.poiDebugLogged = true;
+            // Draw company line if needed (detached from frame)
+            if (showCompanyLine) {
+                ctx.save();
+                ctx.translate(sx, sy);
+                ctx.strokeStyle = '#000000';
+                ctx.lineWidth = 2 * markerScale;
+                const lineHeight = 10 * markerScale; // Fixed height
+                const markerTop = isFriendly ? -(size * 1.0) / 2 : -size * 0.8;
+                const offsetFromTop = 4 * markerScale; // Same offset as dots
+                const yPos = markerTop - offsetFromTop - lineHeight / 2;
+                ctx.beginPath();
+                ctx.moveTo(0, yPos - lineHeight / 2);
+                ctx.lineTo(0, yPos + lineHeight / 2);
+                ctx.stroke();
+                ctx.restore();
+            }
+
+            // DRAW CONVOY NUMBER (If Info Panel is enabled)
+            if (showConvoyInfo) {
+                ctx.save();
+                ctx.translate(sx, sy);
+                ctx.fillStyle = '#FFFFFF';
+                ctx.strokeStyle = '#000000';
+                ctx.lineWidth = 3;
+                ctx.font = `bold ${14 * markerScale}px Arial`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'top'; // Draw below the icon
+
+                // Calculate position below the icon
+                // Icon height is roughly 'size'.
+                const yOffset = (size / 2) + (5 * markerScale);
+                const label = `#${idx + 1}`;
+
+                ctx.strokeText(label, 0, yOffset);
+                ctx.fillText(label, 0, yOffset);
+                ctx.restore();
+            }
+        });
+
+    }
+
+    // 4. Draw Airfields - Moved Here (After Ground Units)
+    if (lastData.airfields && lastData.airfields.length > 0) {
+        // Pre-process for de-cluttering (Hide tags if overlapping)
+        const afRenderItems = lastData.airfields.map((af, idx) => {
+            const [sx, sy] = worldToScreen(af.x, af.y);
+            // CVs have higher priority (2) than generic Airfields (1)
+            // Add original index for stable sort
+            return { af, sx, sy, priority: af.is_cv ? 2 : 1, idx, hideTags: false };
+        });
+
+        // Stable sort: Primary by priority DESC, secondary by original index ASC
+        afRenderItems.sort((a, b) => {
+            if (b.priority !== a.priority) return b.priority - a.priority;
+            return a.idx - b.idx; // Maintain original order for equal priority
+        });
+
+        const drawnCenters = [];
+        const clutterThreshold = 45 * markerScale; // Pixels distance to suppress text
+
+        afRenderItems.forEach(item => {
+            item.hideTags = false; // Use item.hideTags, NOT item.af.hideTags
+            for (const center of drawnCenters) {
+                const dist = Math.hypot(item.sx - center.x, item.sy - center.y);
+                if (dist < clutterThreshold) {
+                    item.hideTags = true;
+                    break;
+                }
+            }
+            if (!item.hideTags) {
+                drawnCenters.push({ x: item.sx, y: item.sy });
+            }
+        });
+
+        // PASS 1: Draw ALL runway rectangles first
+        lastData.airfields.forEach(af => {
+            const [sx, sy] = worldToScreen(af.x, af.y);
+            ctx.strokeStyle = af.color || '#FFFFFF';
+            ctx.fillStyle = af.color || '#FFFFFF';
+
+            // Draw Runway (Rectangle) - ALWAYS DRAW
+            if (af.angle !== undefined) {
+                let rad = af.angle * (Math.PI / 180);
+
+                // Use actual length if available, otherwise default to fixed size
+                let rectW = 30 * markerScale;
+
+                // Use Normalized Length if available
+                if (af.len && af.len > 0.0001) {
+                    // mapDrawW is the full map width in pixels
+                    // af.len is normalized relative to map width
+                    rectW = af.len * mapDrawW;
+
+                    // Scale by 3.0x for CVs (large), 1.0x for regular Airfields
+                    const scaleFactor = af.is_cv ? 3.0 : 1.0;
+                    rectW *= scaleFactor;
+
+                    // Enforce min size for visibility
+                    rectW = Math.max(rectW, 5 * markerScale);
+                } else {
+                    // If length is missing or tiny (phantom?), skip drawing rect?
+                    // User reported phantom rects. If len is tiny, let's hide it.
+                    if (af.len !== undefined) return; // Explicitly tiny -> Hide
                 }
 
-                lastData.pois.forEach(poi => {
-                    const [sx, sy] = worldToScreen(poi.x, poi.y);
+                const rectH = 6 * markerScale;
 
-                    // DEBUG COORDS
-                    // console.log("POI Screen:", sx, sy, "World:", poi.x, poi.y);
+                ctx.save();
+                ctx.translate(sx, sy);
+                ctx.rotate(rad);
+                ctx.fillRect(-rectW / 2, -rectH / 2, rectW, rectH);
+                ctx.strokeStyle = '#000000';
+                ctx.lineWidth = 1 * markerScale;
+                ctx.strokeRect(-rectW / 2, -rectH / 2, rectW, rectH);
+                ctx.restore();
+
+                // --- Draw 12km Radius Circle for Long Runways (>3000m) ---
+                // Calculate runway length in meters using worldWidth
+                const runwayMeters = (af.len || 0) * worldWidth;
+
+                if (runwayMeters > 3000 && worldWidth > 0) {
+                    // 12km radius in normalized coordinates
+                    const radiusNorm = 12000 / worldWidth;
+                    const radiusPixels = radiusNorm * mapDrawW;
 
                     ctx.save();
                     ctx.translate(sx, sy);
-
-                    const poiColor = poi.color || '#FFFFFF';
-                    ctx.strokeStyle = poiColor;
-                    ctx.lineWidth = 3 * markerScale; // Increased
-                    ctx.fillStyle = 'transparent';
-
-                    // Draw targeting reticle (4 corner arcs) with black outline - scaled
-                    const radius = 18 * markerScale;
-                    const outlineWidth = 5 * markerScale;
-                    const colorWidth = 3 * markerScale;
-
-                    // Top-right
                     ctx.beginPath();
-                    ctx.arc(0, 0, radius, -30 * Math.PI / 180, 30 * Math.PI / 180);
-                    ctx.strokeStyle = '#000000';
-                    ctx.lineWidth = outlineWidth;
+                    ctx.arc(0, 0, radiusPixels, 0, 2 * Math.PI);
+                    ctx.strokeStyle = af.color || 'rgba(100, 100, 255, 0.5)';
+                    ctx.setLineDash([10, 5]); // Dashed line
+                    ctx.lineWidth = 4 * markerScale;
+                    ctx.globalAlpha = 0.5;
                     ctx.stroke();
-                    ctx.strokeStyle = poiColor;
-                    ctx.lineWidth = colorWidth;
-                    ctx.stroke();
-
-                    // Bottom-right
-                    ctx.beginPath();
-                    ctx.arc(0, 0, radius, 60 * Math.PI / 180, 120 * Math.PI / 180);
-                    ctx.strokeStyle = '#000000';
-                    ctx.lineWidth = outlineWidth;
-                    ctx.stroke();
-                    ctx.strokeStyle = poiColor;
-                    ctx.lineWidth = colorWidth;
-                    ctx.stroke();
-
-                    // Bottom-left
-                    ctx.beginPath();
-                    ctx.arc(0, 0, radius, 150 * Math.PI / 180, 210 * Math.PI / 180);
-                    ctx.strokeStyle = '#000000';
-                    ctx.lineWidth = outlineWidth;
-                    ctx.stroke();
-                    ctx.strokeStyle = poiColor;
-                    ctx.lineWidth = colorWidth;
-                    ctx.stroke();
-
-                    // Top-left
-                    ctx.beginPath();
-                    ctx.arc(0, 0, radius, 240 * Math.PI / 180, 300 * Math.PI / 180);
-                    ctx.strokeStyle = '#000000';
-                    ctx.lineWidth = outlineWidth;
-                    ctx.stroke();
-                    ctx.strokeStyle = poiColor;
-                    ctx.lineWidth = colorWidth;
-                    ctx.stroke();
-
-
-                    // Owner label (like PC overlay - NO icon displayed)
-                    // Format: "CallsignName's POI"
-                    if (poi.owner) {
-                        ctx.fillStyle = '#FFFFFF';
-                        ctx.strokeStyle = '#000000';
-                        ctx.lineWidth = 3 * markerScale;
-                        ctx.font = `bold ${12 * markerScale}px Arial`;  // Standardized font
-                        const labelText = `${poi.owner}`;
-                        ctx.textAlign = 'center';
-
-                        ctx.strokeText(labelText, 0, -32 * markerScale);
-                        ctx.fillText(labelText, 0, -32 * markerScale);
-                    }
-
-                    // DISTANCE & ETA (Toggleable)
-                    if (showPoiEta && lastData.players && lastData.players['_local']) {
-                        const localP = lastData.players['_local'];
-
-                        let dx = localP.x - poi.x;
-                        let dy = localP.y - poi.y;
-
-                        // Handle Normalized Coordinates (0.0 to 1.0)
-                        // Heuristic matching worldToScreen logic: if values are small, assume normalized
-                        if (Math.abs(localP.x) <= 1.0 && Math.abs(poi.x) <= 1.0) {
-                            const wW = (typeof worldWidth !== 'undefined') ? worldWidth : 65000;
-                            const wH = (typeof worldHeight !== 'undefined') ? worldHeight : 65000;
-                            dx *= wW;
-                            dy *= wH;
-                        }
-
-                        const distM = Math.hypot(dx, dy);
-
-                        // Format Distance
-                        let distStr = "";
-                        if (distM < 1000) distStr = `${Math.round(distM)}m`;
-                        else distStr = `${(distM / 1000).toFixed(1)}km`;
-
-                        // Calculate ETA (if moving > 10 km/h)
-                        let timeStr = "";
-                        const speedKmh = localP.spd || 0;
-                        if (speedKmh > 10) {
-                            const speedMs = speedKmh / 3.6;
-                            const timeSec = distM / speedMs;
-
-                            if (timeSec < 3600) {
-                                const m = Math.floor(timeSec / 60);
-                                const s = Math.floor(timeSec % 60);
-                                timeStr = `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
-                            } else {
-                                const h = Math.floor(timeSec / 3600);
-                                const m = Math.floor((timeSec % 3600) / 60);
-                                timeStr = `${h}:${m.toString().padStart(2, '0')}h`;
-                            }
-                        }
-
-                        // Render Info
-                        const infoText = timeStr ? `${distStr} - ${timeStr}` : distStr;
-
-                        ctx.font = `bold ${11 * markerScale}px Arial`;
-                        ctx.fillStyle = '#00FF00'; // Green
-                        ctx.strokeStyle = '#000000';
-                        ctx.lineWidth = 3 * markerScale;
-                        ctx.textAlign = 'center';
-
-                        // Draw below the owner label (which is at -24)
-                        // Or below the reticle? Reticle radius is 18.
-                        // Let's draw it at +30 (was +24)
-                        ctx.strokeText(infoText, 0, 32 * markerScale);
-                        ctx.fillText(infoText, 0, 32 * markerScale);
-                    }
-
+                    ctx.setLineDash([]); // Reset dash
+                    ctx.globalAlpha = 1.0;
                     ctx.restore();
-                });
+                }
             }
+        });
 
-            // 5. Draw Players - LAST (On top of everything)
-            // Convert players object to array
-            const players = Object.entries(lastData.players);
+        // PASS 2: Draw ALL text labels on top of rectangles
+        afRenderItems.forEach(item => {
+            if (item.hideTags) return; // Skip hidden labels (use item.hideTags)
 
-            // Helper: Draw Compass Rose (Multi-Pass for Seamless White)
-            function drawCompassRose(x, y, radius, heading, headingColor, poiBearing, others = []) {
-                ctx.save();
-                ctx.translate(x, y);
+            const af = item.af;
+            const [sx, sy] = worldToScreen(af.x, af.y);
 
-                // PRE-CALCULATE TICKS
-                const ticks = [];
-                for (let i = 0; i < 360; i += 15) {
-                    const rad = (i - 90) * Math.PI / 180;
+            // Skip phantom text if phantom rect
+            if (af.len !== undefined && af.len < 0.0001) return;
 
-                    let tickLen = 5 * markerScale;
-                    let tickWidth = 1.5;
-                    let outlineInc = 1.5;
-                    let color = 'rgba(255, 255, 255, 0.6)';
-                    let label = "";
-
-                    if (i % 90 === 0) { // Cardinals
-                        tickLen = 10 * markerScale;
-                        tickWidth = 3;
-                        outlineInc = 2.5;
-                        color = 'rgba(255, 255, 255, 1.0)';
-                        if (i === 0) label = "N";
-                        else if (i === 90) label = "E";
-                        else if (i === 180) label = "S";
-                        else if (i === 270) label = "W";
-                    } else if (i % 45 === 0) { // Intercardinals
-                        tickLen = 8 * markerScale;
-                        tickWidth = 2.5;
-                        outlineInc = 2.5;
-                        color = 'rgba(255, 255, 255, 0.9)';
-                        if (i === 45) label = "NE";
-                        else if (i === 135) label = "SE";
-                        else if (i === 225) label = "SW";
-                        else if (i === 315) label = "NW";
-                    } else {
-                        tickLen = 5 * markerScale;
-                        tickWidth = 1.5;
-                        outlineInc = 1.5;
-                        color = 'rgba(255, 255, 255, 0.6)';
-                    }
-
-                    const rInner = radius - tickLen;
-                    const rOuter = radius + tickLen;
-                    const x1 = Math.cos(rad) * rInner;
-                    const y1 = Math.sin(rad) * rInner;
-                    const x2 = Math.cos(rad) * rOuter;
-                    const y2 = Math.sin(rad) * rOuter;
-
-                    ticks.push({ x1, y1, x2, y2, tickWidth, outlineInc, color, label, rad });
-                }
-
-                // Add POI Bearing as a Tick (if present)
-                if (poiBearing !== undefined) {
-                    // Similar to Cardinal Tick Style
-                    const tickLen = 10 * markerScale; // Thick like cardinal
-                    const rInner = radius - tickLen;
-                    const rOuter = radius + tickLen;
-                    const x1 = Math.cos(poiBearing) * rInner;
-                    const y1 = Math.sin(poiBearing) * rInner;
-                    const x2 = Math.cos(poiBearing) * rOuter;
-                    const y2 = Math.sin(poiBearing) * rOuter;
-
-                    ticks.push({
-                        x1, y1, x2, y2,
-                        tickWidth: 3,
-                        outlineInc: 2.5,
-                        color: headingColor || '#00FFFF', // Player Color
-                        label: "",
-                        rad: poiBearing
-                    });
-                }
-
-                // PASS 1: BLACK OUTLINE (Ring + Ticks)
-                ctx.lineCap = 'round';
-
-                // Ring Outline
-                ctx.beginPath();
-                ctx.arc(0, 0, radius, 0, 2 * Math.PI);
-                ctx.strokeStyle = '#000000';
-                ctx.lineWidth = 4.5;
-                ctx.stroke();
-
-                // Ticks Outline
-                ticks.forEach(t => {
-                    ctx.beginPath();
-                    ctx.moveTo(t.x1, t.y1);
-                    ctx.lineTo(t.x2, t.y2);
-                    ctx.strokeStyle = '#000000';
-                    ctx.lineWidth = t.tickWidth + t.outlineInc;
-                    ctx.stroke();
-                });
-
-                // PASS 2: WHITE FILL (Ring + Ticks)
-                ctx.lineCap = 'butt';
-
-                // Ring Fill
-                ctx.beginPath();
-                ctx.arc(0, 0, radius, 0, 2 * Math.PI);
-                ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
-                ctx.lineWidth = 2.5;
-                ctx.stroke();
-
-                // Ticks Fill
-                ticks.forEach(t => {
-                    ctx.beginPath();
-                    ctx.moveTo(t.x1, t.y1);
-                    ctx.lineTo(t.x2, t.y2);
-                    ctx.strokeStyle = t.color;
-                    ctx.lineWidth = t.tickWidth;
-                    ctx.stroke();
-                });
-
-                // LABELS
-                ticks.forEach(t => {
-                    if (t.label) {
-                        const fontSize = (t.label.length === 1) ? 14 : 11;
-                        const fontWeight = "bold";
-                        ctx.font = `${fontWeight} ${fontSize * markerScale}px Consolas, monospace`;
-                        ctx.textAlign = 'center';
-                        ctx.textBaseline = 'middle';
-
-                        const rLabel = radius - (25 * markerScale);
-                        const lx = Math.cos(t.rad) * rLabel;
-                        const ly = Math.sin(t.rad) * rLabel;
-
-                        ctx.strokeStyle = '#000000';
-                        ctx.lineWidth = 3;
-                        ctx.strokeText(t.label, lx, ly);
-
-                        ctx.fillStyle = 'rgba(255, 255, 255, 1.0)';
-                        ctx.fillText(t.label, lx, ly);
-                    }
-                });
-
-                // Helper to draw text label radially outside
-                function drawLabel(angle, text, radiusOffset, color) {
-                    ctx.save();
-                    const rText = radius + radiusOffset;
-                    const lx = Math.cos(angle) * rText;
-                    const ly = Math.sin(angle) * rText;
-
-                    ctx.font = `bold ${12 * markerScale}px Arial`;
-                    ctx.textAlign = 'center';
-                    ctx.textBaseline = 'middle';
-
-                    ctx.strokeStyle = '#000000';
-                    ctx.lineWidth = 3;
-                    ctx.strokeText(text, lx, ly);
-
-                    ctx.fillStyle = color || '#FFFFFF';
-                    ctx.fillText(text, lx, ly);
-                    ctx.restore();
-                }
-
-                const radToDegStr = (rad) => {
-                    let deg = Math.round((rad * 180 / Math.PI) + 90) % 360;
-                    if (deg < 0) deg += 360;
-                    return deg.toString().padStart(3, '0');
-                };
-
-                // POI Label (Since tick is drawn above, just label here)
-                if (poiBearing !== undefined) {
-                    drawLabel(poiBearing, radToDegStr(poiBearing), 24 * markerScale, headingColor);
-                }
-
-                // Draw Other Players / Other Markers
-                // others: [{ type: 'player'|'poi', bearing: number, color: string }]
-                others.forEach(o => {
-                    // For WebMap, should Other POIs also be ticks? 
-                    // Let's stick to Overlay consistency: YES.
-                    // But 'others' loop is outside Pass 1/2? 
-                    // No, we can render them separately or add to ticks.
-                    // For now, render separately but with Outline/Fill if line.
-
-                    const tx = Math.cos(o.bearing) * radius;
-                    const ty = Math.sin(o.bearing) * radius;
-
-                    ctx.save();
-                    ctx.translate(tx, ty);
-                    ctx.rotate(o.bearing);
-
-                    if (o.type === 'player') {
-                        // Triangle
-                        ctx.beginPath();
-                        ctx.moveTo(0, -6 * markerScale);
-                        ctx.lineTo(0, 6 * markerScale);
-                        ctx.lineTo(14 * markerScale, 0);
-                        ctx.closePath();
-                        ctx.fillStyle = o.color;
-                        ctx.fill();
-                        ctx.strokeStyle = '#000000';
-                        ctx.lineWidth = 1;
-                        ctx.stroke();
-                    } else if (o.type === 'poi') {
-                        // Line (Convert to Tick style?)
-                        // User said "apply the same rendering change to the webmap as well"
-                        // Overlay POI is now a Cardinal Tick.
-                        // I will replicate Cardinal Tick style here strictly.
-                        // But I need to do it via Pass 1/2?
-                        // Or just draw it locally with Outline/Fill.
-
-                        // Local Tick Drawing (Seamless hack: Draw Line Outline, then Line Fill)
-                        // It won't merge perfectly with Ring unless in Pass 1/2.
-                        // But ring is already drawn.
-                        // Whatever, drawn on top is fine for now if not merging with ring.
-                        // Wait, overlay merged them.
-                        // I will leave existing logic for others (simple markers) to avoid over-engineering JS loop for now.
-
-                        ctx.beginPath();
-                        ctx.moveTo(0, 0);
-                        ctx.lineTo(10 * markerScale, 0);
-                        ctx.strokeStyle = '#000000'; // Outline
-                        ctx.lineWidth = 5;
-                        ctx.stroke();
-
-                        ctx.strokeStyle = o.color;
-                        ctx.lineWidth = 3;
-                        ctx.stroke();
-                    }
-                    ctx.restore();
-
-                    // Label
-                    drawLabel(o.bearing, radToDegStr(o.bearing), 35 * markerScale, o.color);
-                });
-
-                // Draw Heading Marker (Triangle) - Own
-                if (heading !== undefined) {
-                    const rTick = radius;
-                    const tx = Math.cos(heading) * rTick;
-                    const ty = Math.sin(heading) * rTick;
-
-                    ctx.save();
-                    ctx.translate(tx, ty);
-                    ctx.rotate(heading);
-
-                    ctx.beginPath();
-                    ctx.moveTo(0, -6 * markerScale);
-                    ctx.lineTo(0, 6 * markerScale);
-                    ctx.lineTo(14 * markerScale, 0);
-                    ctx.closePath();
-
-                    ctx.fillStyle = headingColor || '#FFFF00';
-                    ctx.fill();
-                    ctx.strokeStyle = '#000000';
-                    ctx.lineWidth = 1;
-                    ctx.stroke();
-                    ctx.restore();
-
-                    // Label
-                    drawLabel(heading, radToDegStr(heading), 24 * markerScale);
-                }
-
-                ctx.restore();
-            }
-
-            players.forEach(([pid, p]) => {
-                // Skip players with invalid coordinates (null/undefined become 0 and cause centering issues)
-                if (p.x === null || p.x === undefined || p.y === null || p.y === undefined) {
-                    return; // Skip this player
-                }
-
-                const [sx, sy] = worldToScreen(p.x, p.y);
-
-                // Calculate rotation from dx, dy
-                let rotation = 0;
-                if (p.dx !== undefined && p.dy !== undefined) {
-                    if (Math.abs(p.dx) > 0.001 || Math.abs(p.dy) > 0.001) {
-                        rotation = Math.atan2(p.dy, p.dx);
-                    }
-                }
-
-                // Calculate POI Bearing (if local player has one)
-                let poiBearing = undefined;
-                if (pid === '_local' && lastData.pois && Array.isArray(lastData.pois)) {
-                    const myPoi = lastData.pois.find(poi => poi.owner === p.callsign);
-                    if (myPoi) {
-                        poiBearing = Math.atan2(myPoi.y - p.y, myPoi.x - p.x);
-                    }
-                }
-
-                // Compass Rose (Local Player Only)
-                if (pid === '_local' && showCompassRose) {
-                    // Collect Others
-                    const others = [];
-
-                    // 1. Other Players
-                    players.forEach(([otherPid, otherP]) => {
-                        if (otherPid === '_local') return;
-                        // Calculate bearing from Me to Them
-                        const bearing = Math.atan2(otherP.y - p.y, otherP.x - p.x);
-                        others.push({ type: 'player', bearing: bearing, color: otherP.color });
-                    });
-
-                    // 2. Other POIs (if owner known)
-                    if (lastData.pois && Array.isArray(lastData.pois)) {
-                        lastData.pois.forEach(poi => {
-                            if (poi.owner && poi.owner !== p.callsign) {
-                                // Line to THEIR poi
-                                const bearing = Math.atan2(poi.y - p.y, poi.x - p.x);
-                                others.push({ type: 'poi', bearing: bearing, color: poi.color });
-                            }
-                        });
-                    }
-
-                    try {
-                        drawCompassRose(sx, sy, 100 * markerScale, rotation, p.color, poiBearing, others);
-                    } catch (e) {
-                        console.error("Compass Rose Error:", e);
-                    }
-                }
-
-                // Trail
-                if (p.trail && p.trail.length > 0) {
-                    ctx.beginPath();
-                    ctx.strokeStyle = p.color || '#FFFFFF';
-                    ctx.lineWidth = 2;
-                    p.trail.forEach((pt, idx) => {
-                        const [tx, ty] = worldToScreen(pt.x, pt.y);
-                        if (idx === 0) ctx.moveTo(tx, ty);
-                        else ctx.lineTo(tx, ty);
-                    });
-                    ctx.stroke();
-                }
-
-                // Draw Arrow (like PC overlay)
+            // Draw Info Text (Bearing / Reciprocal / Length)
+            if (af.angle !== undefined) {
                 ctx.save();
                 ctx.translate(sx, sy);
-                ctx.rotate(rotation);
+                ctx.fillStyle = '#FFFFFF';
+                ctx.strokeStyle = '#000000';
+                ctx.lineWidth = 2 * markerScale;
+                ctx.font = `bold ${12 * markerScale}px Arial`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'top';
 
-                // Draw arrow shape with black outline
-                const markerColor = p.color || '#FFFF00';
-                const arrowSize = 12 * markerScale;
+                let bearing = (af.angle + 90);
+                bearing = (bearing % 360 + 360) % 360;
+                let recip = (bearing + 180) % 360;
 
-                // Draw velocity vector if moving (starts from arrow tip, UNDER outline)
-                if (p.spd && p.spd > 10) {
-                    const vectorLen = (p.spd * 0.05 * markerScale);  // Scale based on speed
-                    ctx.save();
-                    ctx.strokeStyle = markerColor;
-                    ctx.lineWidth = 1.5 * markerScale;
-                    ctx.beginPath();
-                    ctx.moveTo(arrowSize, 0);  // Start from arrow tip
-                    ctx.lineTo(arrowSize + vectorLen, 0);  // Extend outward along X axis (forward)
-                    ctx.stroke();
-                    ctx.restore();
+                let infoText = `${Math.round(recip)}/${Math.round(bearing)}`;
+
+                if (af.len && af.len > 0.0001) {
+                    const worldW = (lastData.map_info.map_max[0] - lastData.map_info.map_min[0]);
+                    const lenM = Math.round(af.len * worldW);
+                    infoText += ` ${lenM}m`;
                 }
 
-                // Draw arrow path (Must be defined AFTER velocity vector, as vector drawing clears path)
-                ctx.beginPath();
-                ctx.moveTo(arrowSize, 0);           // tip
-                ctx.lineTo(-arrowSize / 3, -arrowSize / 2);     // back left
-                ctx.lineTo(-arrowSize / 3, arrowSize / 2);      // back right
-                ctx.closePath();
+                ctx.strokeText(infoText, 0, 18 * markerScale);
+                ctx.fillText(infoText, 0, 18 * markerScale);
+                ctx.restore();
+            }
 
-                // First pass: Black outline (thicker)
-                ctx.strokeStyle = '#000000';
-                ctx.lineWidth = 5 * markerScale;
-                ctx.stroke();
-
-                // Second pass: Colored stroke (thinner)
-                ctx.strokeStyle = markerColor;
-                ctx.lineWidth = 2.5 * markerScale;
-                ctx.stroke();
-
-                // Rotate back for text
-                ctx.rotate(-rotation);
-
-                // Callsign text (already rotated back to upright)
-                ctx.fillStyle = '#FFF';
+            // Draw Label "AF#"/"CV#"
+            if (af.id) {
+                ctx.font = `bold ${12 * markerScale}px Arial`;
+                ctx.fillStyle = '#FFFFFF';
                 ctx.strokeStyle = '#000000';
                 ctx.lineWidth = 3 * markerScale;
-                ctx.font = `bold ${12 * markerScale}px Arial`; // Standardized
-                ctx.textAlign = 'center'; // Explicitly center
-                const callsign = p.callsign || 'Unknown';
+                ctx.textAlign = 'center';
 
-                ctx.strokeText(callsign, 0, -20 * markerScale);
-                ctx.fillText(callsign, 0, -20 * markerScale); // Adjusted offset
+                const labelPrefix = af.is_cv ? "CV" : "AF";
+                const label = `${labelPrefix}${af.id}`;
+                ctx.strokeText(label, sx, sy - 23 * markerScale);
+                ctx.fillText(label, sx, sy - 23 * markerScale);
+            }
+        });
+    }
 
-                // Altitude and Speed BELOW the marker arrow
-                // Format matches PC overlay: "speed altitude" (no units)
-                // Position text below the arrow tip (positive Y)
-                if (p.alt !== undefined || p.spd !== undefined) {
-                    ctx.font = `bold ${12 * markerScale}px Arial`;  // Standardized
-                    ctx.fillStyle = '#FFFFFF';  // White text
-                    ctx.textAlign = 'center'; // Explicitly center
+    // 4. Draw POIs (Points of Interest) - AFTER Ground Units
+    if (lastData.pois && lastData.pois.length > 0) {
+        // DEBUG POI
+        if (!window.poiDebugLogged) {
+            console.log("Drawing POIs:", lastData.pois);
+            window.poiDebugLogged = true;
+        }
 
-                    const altKm = (p.alt / 1000).toFixed(1);  // 1 decimal like PC
-                    // Apply unit conversion like PC overlay
-                    let spdDisplay = p.spd;
-                    if (lastData.config && lastData.config.unit_is_kts) {
-                        spdDisplay = p.spd * 0.539957;  // Convert km/h to knots
-                    }
-                    const statsText = `${Math.round(spdDisplay)} ${altKm}`;  // Speed first, like PC overlay
+        lastData.pois.forEach(poi => {
+            const [sx, sy] = worldToScreen(poi.x, poi.y);
 
-                    ctx.strokeText(statsText, 0, 28 * markerScale);
-                    ctx.fillText(statsText, 0, 28 * markerScale);  // Adjusted offset
+            // DEBUG COORDS
+            // console.log("POI Screen:", sx, sy, "World:", poi.x, poi.y);
+
+            ctx.save();
+            ctx.translate(sx, sy);
+
+            const poiColor = poi.color || '#FFFFFF';
+            ctx.strokeStyle = poiColor;
+            ctx.lineWidth = 3 * markerScale; // Increased
+            ctx.fillStyle = 'transparent';
+
+            // Draw targeting reticle (4 corner arcs) with black outline - scaled
+            const radius = 18 * markerScale;
+            const outlineWidth = 5 * markerScale;
+            const colorWidth = 3 * markerScale;
+
+            // Top-right
+            ctx.beginPath();
+            ctx.arc(0, 0, radius, -30 * Math.PI / 180, 30 * Math.PI / 180);
+            ctx.strokeStyle = '#000000';
+            ctx.lineWidth = outlineWidth;
+            ctx.stroke();
+            ctx.strokeStyle = poiColor;
+            ctx.lineWidth = colorWidth;
+            ctx.stroke();
+
+            // Bottom-right
+            ctx.beginPath();
+            ctx.arc(0, 0, radius, 60 * Math.PI / 180, 120 * Math.PI / 180);
+            ctx.strokeStyle = '#000000';
+            ctx.lineWidth = outlineWidth;
+            ctx.stroke();
+            ctx.strokeStyle = poiColor;
+            ctx.lineWidth = colorWidth;
+            ctx.stroke();
+
+            // Bottom-left
+            ctx.beginPath();
+            ctx.arc(0, 0, radius, 150 * Math.PI / 180, 210 * Math.PI / 180);
+            ctx.strokeStyle = '#000000';
+            ctx.lineWidth = outlineWidth;
+            ctx.stroke();
+            ctx.strokeStyle = poiColor;
+            ctx.lineWidth = colorWidth;
+            ctx.stroke();
+
+            // Top-left
+            ctx.beginPath();
+            ctx.arc(0, 0, radius, 240 * Math.PI / 180, 300 * Math.PI / 180);
+            ctx.strokeStyle = '#000000';
+            ctx.lineWidth = outlineWidth;
+            ctx.stroke();
+            ctx.strokeStyle = poiColor;
+            ctx.lineWidth = colorWidth;
+            ctx.stroke();
+
+
+            // Owner label (like PC overlay - NO icon displayed)
+            // Format: "CallsignName's POI"
+            if (poi.owner) {
+                ctx.fillStyle = '#FFFFFF';
+                ctx.strokeStyle = '#000000';
+                ctx.lineWidth = 3 * markerScale;
+                ctx.font = `bold ${12 * markerScale}px Arial`;  // Standardized font
+                const labelText = `${poi.owner}`;
+                ctx.textAlign = 'center';
+
+                ctx.strokeText(labelText, 0, -32 * markerScale);
+                ctx.fillText(labelText, 0, -32 * markerScale);
+            }
+
+            // DISTANCE & ETA (Toggleable)
+            if (showPoiEta && lastData.players && lastData.players['_local']) {
+                const localP = lastData.players['_local'];
+
+                let dx = localP.x - poi.x;
+                let dy = localP.y - poi.y;
+
+                // Handle Normalized Coordinates (0.0 to 1.0)
+                // Heuristic matching worldToScreen logic: if values are small, assume normalized
+                if (Math.abs(localP.x) <= 1.0 && Math.abs(poi.x) <= 1.0) {
+                    const wW = (typeof worldWidth !== 'undefined') ? worldWidth : 65000;
+                    const wH = (typeof worldHeight !== 'undefined') ? worldHeight : 65000;
+                    dx *= wW;
+                    dy *= wH;
                 }
 
+                const distM = Math.hypot(dx, dy);
 
+                // Format Distance
+                let distStr = "";
+                if (distM < 1000) distStr = `${Math.round(distM)}m`;
+                else distStr = `${(distM / 1000).toFixed(1)}km`;
 
-                ctx.restore();
-            });
+                // Calculate ETA (if moving > 10 km/h)
+                let timeStr = "";
+                const speedKmh = localP.spd || 0;
+                if (speedKmh > 10) {
+                    const speedMs = speedKmh / 3.6;
+                    const timeSec = distM / speedMs;
 
-            // --- DRAW PLANNING PATH (Top Z-Order - Above Icons) ---
-            if (planningWaypoints.length > 0) {
-                ctx.save();
-                ctx.lineWidth = 3;
-                ctx.strokeStyle = '#00FFFF'; // Cyan
-                ctx.fillStyle = '#00FFFF';
-                ctx.font = 'bold 14px Arial';
+                    if (timeSec < 3600) {
+                        const m = Math.floor(timeSec / 60);
+                        const s = Math.floor(timeSec % 60);
+                        timeStr = `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+                    } else {
+                        const h = Math.floor(timeSec / 3600);
+                        const m = Math.floor((timeSec % 3600) / 60);
+                        timeStr = `${h}:${m.toString().padStart(2, '0')}h`;
+                    }
+                }
+
+                // Render Info
+                const infoText = timeStr ? `${distStr} - ${timeStr}` : distStr;
+
+                ctx.font = `bold ${11 * markerScale}px Arial`;
+                ctx.fillStyle = '#00FF00'; // Green
+                ctx.strokeStyle = '#000000';
+                ctx.lineWidth = 3 * markerScale;
                 ctx.textAlign = 'center';
-                ctx.shadowColor = 'black';
-                ctx.shadowBlur = 4;
 
-                // Draw Lines
+                // Draw below the owner label (which is at -24)
+                // Or below the reticle? Reticle radius is 18.
+                // Let's draw it at +30 (was +24)
+                ctx.strokeText(infoText, 0, 32 * markerScale);
+                ctx.fillText(infoText, 0, 32 * markerScale);
+            }
+
+            ctx.restore();
+        });
+    }
+
+    // 5. Draw Players - LAST (On top of everything)
+    // Convert players object to array
+    const players = Object.entries(lastData.players);
+
+    // Helper: Draw Compass Rose (Multi-Pass for Seamless White)
+    function drawCompassRose(x, y, radius, heading, headingColor, poiBearing, others = []) {
+        ctx.save();
+        ctx.translate(x, y);
+
+        // PRE-CALCULATE TICKS
+        const ticks = [];
+        for (let i = 0; i < 360; i += 15) {
+            const rad = (i - 90) * Math.PI / 180;
+
+            let tickLen = 5 * markerScale;
+            let tickWidth = 1.5;
+            let outlineInc = 1.5;
+            let color = 'rgba(255, 255, 255, 0.6)';
+            let label = "";
+
+            if (i % 90 === 0) { // Cardinals
+                tickLen = 10 * markerScale;
+                tickWidth = 3;
+                outlineInc = 2.5;
+                color = 'rgba(255, 255, 255, 1.0)';
+                if (i === 0) label = "N";
+                else if (i === 90) label = "E";
+                else if (i === 180) label = "S";
+                else if (i === 270) label = "W";
+            } else if (i % 45 === 0) { // Intercardinals
+                tickLen = 8 * markerScale;
+                tickWidth = 2.5;
+                outlineInc = 2.5;
+                color = 'rgba(255, 255, 255, 0.9)';
+                if (i === 45) label = "NE";
+                else if (i === 135) label = "SE";
+                else if (i === 225) label = "SW";
+                else if (i === 315) label = "NW";
+            } else {
+                tickLen = 5 * markerScale;
+                tickWidth = 1.5;
+                outlineInc = 1.5;
+                color = 'rgba(255, 255, 255, 0.6)';
+            }
+
+            const rInner = radius - tickLen;
+            const rOuter = radius + tickLen;
+            const x1 = Math.cos(rad) * rInner;
+            const y1 = Math.sin(rad) * rInner;
+            const x2 = Math.cos(rad) * rOuter;
+            const y2 = Math.sin(rad) * rOuter;
+
+            ticks.push({ x1, y1, x2, y2, tickWidth, outlineInc, color, label, rad });
+        }
+
+        // Add POI Bearing as a Tick (if present)
+        if (poiBearing !== undefined) {
+            // Similar to Cardinal Tick Style
+            const tickLen = 10 * markerScale; // Thick like cardinal
+            const rInner = radius - tickLen;
+            const rOuter = radius + tickLen;
+            const x1 = Math.cos(poiBearing) * rInner;
+            const y1 = Math.sin(poiBearing) * rInner;
+            const x2 = Math.cos(poiBearing) * rOuter;
+            const y2 = Math.sin(poiBearing) * rOuter;
+
+            ticks.push({
+                x1, y1, x2, y2,
+                tickWidth: 3,
+                outlineInc: 2.5,
+                color: headingColor || '#00FFFF', // Player Color
+                label: "",
+                rad: poiBearing
+            });
+        }
+
+        // PASS 1: BLACK OUTLINE (Ring + Ticks)
+        ctx.lineCap = 'round';
+
+        // Ring Outline
+        ctx.beginPath();
+        ctx.arc(0, 0, radius, 0, 2 * Math.PI);
+        ctx.strokeStyle = '#000000';
+        ctx.lineWidth = 4.5;
+        ctx.stroke();
+
+        // Ticks Outline
+        ticks.forEach(t => {
+            ctx.beginPath();
+            ctx.moveTo(t.x1, t.y1);
+            ctx.lineTo(t.x2, t.y2);
+            ctx.strokeStyle = '#000000';
+            ctx.lineWidth = t.tickWidth + t.outlineInc;
+            ctx.stroke();
+        });
+
+        // PASS 2: WHITE FILL (Ring + Ticks)
+        ctx.lineCap = 'butt';
+
+        // Ring Fill
+        ctx.beginPath();
+        ctx.arc(0, 0, radius, 0, 2 * Math.PI);
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+        ctx.lineWidth = 2.5;
+        ctx.stroke();
+
+        // Ticks Fill
+        ticks.forEach(t => {
+            ctx.beginPath();
+            ctx.moveTo(t.x1, t.y1);
+            ctx.lineTo(t.x2, t.y2);
+            ctx.strokeStyle = t.color;
+            ctx.lineWidth = t.tickWidth;
+            ctx.stroke();
+        });
+
+        // LABELS
+        ticks.forEach(t => {
+            if (t.label) {
+                const fontSize = (t.label.length === 1) ? 14 : 11;
+                const fontWeight = "bold";
+                ctx.font = `${fontWeight} ${fontSize * markerScale}px Consolas, monospace`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+
+                const rLabel = radius - (25 * markerScale);
+                const lx = Math.cos(t.rad) * rLabel;
+                const ly = Math.sin(t.rad) * rLabel;
+
+                ctx.strokeStyle = '#000000';
+                ctx.lineWidth = 3;
+                ctx.strokeText(t.label, lx, ly);
+
+                ctx.fillStyle = 'rgba(255, 255, 255, 1.0)';
+                ctx.fillText(t.label, lx, ly);
+            }
+        });
+
+        // Helper to draw text label radially outside
+        function drawLabel(angle, text, radiusOffset, color) {
+            ctx.save();
+            const rText = radius + radiusOffset;
+            const lx = Math.cos(angle) * rText;
+            const ly = Math.sin(angle) * rText;
+
+            ctx.font = `bold ${12 * markerScale}px Arial`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+
+            ctx.strokeStyle = '#000000';
+            ctx.lineWidth = 3;
+            ctx.strokeText(text, lx, ly);
+
+            ctx.fillStyle = color || '#FFFFFF';
+            ctx.fillText(text, lx, ly);
+            ctx.restore();
+        }
+
+        const radToDegStr = (rad) => {
+            let deg = Math.round((rad * 180 / Math.PI) + 90) % 360;
+            if (deg < 0) deg += 360;
+            return deg.toString().padStart(3, '0');
+        };
+
+        // POI Label (Since tick is drawn above, just label here)
+        if (poiBearing !== undefined) {
+            drawLabel(poiBearing, radToDegStr(poiBearing), 24 * markerScale, headingColor);
+        }
+
+        // Draw Other Players / Other Markers
+        // others: [{ type: 'player'|'poi', bearing: number, color: string }]
+        others.forEach(o => {
+            // For WebMap, should Other POIs also be ticks? 
+            // Let's stick to Overlay consistency: YES.
+            // But 'others' loop is outside Pass 1/2? 
+            // No, we can render them separately or add to ticks.
+            // For now, render separately but with Outline/Fill if line.
+
+            const tx = Math.cos(o.bearing) * radius;
+            const ty = Math.sin(o.bearing) * radius;
+
+            ctx.save();
+            ctx.translate(tx, ty);
+            ctx.rotate(o.bearing);
+
+            if (o.type === 'player') {
+                // Triangle
                 ctx.beginPath();
-                planningWaypoints.forEach((pt, i) => {
-                    const [sx, sy] = worldToScreen(pt.x, pt.y);
-                    if (i === 0) ctx.moveTo(sx, sy);
-                    else ctx.lineTo(sx, sy);
-                });
+                ctx.moveTo(0, -6 * markerScale);
+                ctx.lineTo(0, 6 * markerScale);
+                ctx.lineTo(14 * markerScale, 0);
+                ctx.closePath();
+                ctx.fillStyle = o.color;
+                ctx.fill();
+                ctx.strokeStyle = '#000000';
+                ctx.lineWidth = 1;
+                ctx.stroke();
+            } else if (o.type === 'poi') {
+                // Line (Convert to Tick style?)
+                // User said "apply the same rendering change to the webmap as well"
+                // Overlay POI is now a Cardinal Tick.
+                // I will replicate Cardinal Tick style here strictly.
+                // But I need to do it via Pass 1/2?
+                // Or just draw it locally with Outline/Fill.
+
+                // Local Tick Drawing (Seamless hack: Draw Line Outline, then Line Fill)
+                // It won't merge perfectly with Ring unless in Pass 1/2.
+                // But ring is already drawn.
+                // Whatever, drawn on top is fine for now if not merging with ring.
+                // Wait, overlay merged them.
+                // I will leave existing logic for others (simple markers) to avoid over-engineering JS loop for now.
+
+                ctx.beginPath();
+                ctx.moveTo(0, 0);
+                ctx.lineTo(10 * markerScale, 0);
+                ctx.strokeStyle = '#000000'; // Outline
+                ctx.lineWidth = 5;
                 ctx.stroke();
 
-                // Draw Points & Text
-                let totalDist = 0;
-                planningWaypoints.forEach((pt, i) => {
-                    const [sx, sy] = worldToScreen(pt.x, pt.y);
+                ctx.strokeStyle = o.color;
+                ctx.lineWidth = 3;
+                ctx.stroke();
+            }
+            ctx.restore();
 
-                    // Dot
-                    ctx.beginPath();
-                    ctx.fillStyle = '#00FFFF'; // Keep dots Cyan
-                    ctx.arc(sx, sy, 5, 0, Math.PI * 2);
-                    ctx.fill();
+            // Label
+            drawLabel(o.bearing, radToDegStr(o.bearing), 35 * markerScale, o.color);
+        });
 
-                    // --- Waypoint ETA (If Enabled) ---
-                    if (showPoiEta && lastData && lastData.players && lastData.players['_local']) {
-                        const localP = lastData.players['_local'];
-                        const wW = lastData.map_info ? (lastData.map_info.map_max[0] - lastData.map_info.map_min[0]) : 65000;
-                        const wH = lastData.map_info ? (lastData.map_info.map_max[1] - lastData.map_info.map_min[1]) : 65000;
+        // Draw Heading Marker (Triangle) - Own
+        if (heading !== undefined) {
+            const rTick = radius;
+            const tx = Math.cos(heading) * rTick;
+            const ty = Math.sin(heading) * rTick;
 
-                        let bestEtaDist = Infinity;
-                        let cumPath0_i = 0;
+            ctx.save();
+            ctx.translate(tx, ty);
+            ctx.rotate(heading);
 
-                        for (let k = 1; k <= i; k++) {
-                            const p1 = planningWaypoints[k - 1];
-                            const p2 = planningWaypoints[k];
-                            cumPath0_i += Math.hypot((p2.x - p1.x) * wW, (p2.y - p1.y) * wH);
-                        }
+            ctx.beginPath();
+            ctx.moveTo(0, -6 * markerScale);
+            ctx.lineTo(0, 6 * markerScale);
+            ctx.lineTo(14 * markerScale, 0);
+            ctx.closePath();
 
-                        let runPath0_k = 0;
-                        for (let k = 0; k <= i; k++) {
-                            if (k > 0) {
-                                const p1 = planningWaypoints[k - 1];
-                                const p2 = planningWaypoints[k];
-                                runPath0_k += Math.hypot((p2.x - p1.x) * wW, (p2.y - p1.y) * wH);
-                            }
-                            const distP_k = Math.hypot((planningWaypoints[k].x - localP.x) * wW, (planningWaypoints[k].y - localP.y) * wH);
-                            const cost = distP_k + (cumPath0_i - runPath0_k);
-                            if (cost < bestEtaDist) bestEtaDist = cost;
-                        }
+            ctx.fillStyle = headingColor || '#FFFF00';
+            ctx.fill();
+            ctx.strokeStyle = '#000000';
+            ctx.lineWidth = 1;
+            ctx.stroke();
+            ctx.restore();
 
-                        const speedKmh = (etaOverrideSpeed !== null) ? etaOverrideSpeed : (localP.spd || 0);
-                        if (speedKmh > 10) {
-                            const speedMs = speedKmh / 3.6;
-                            const timeSec = bestEtaDist / speedMs;
+            // Label
+            drawLabel(heading, radToDegStr(heading), 24 * markerScale);
+        }
 
-                            let timeStr = "";
-                            if (timeSec < 3600) {
-                                const m = Math.floor(timeSec / 60);
-                                const s = Math.floor(timeSec % 60);
-                                timeStr = `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
-                            } else {
-                                const h = Math.floor(timeSec / 3600);
-                                const m = Math.floor((timeSec % 3600) / 60);
-                                timeStr = `${h}:${m.toString().padStart(2, '0')}h`;
-                            }
+        ctx.restore();
+    }
 
-                            ctx.save();
-                            ctx.shadowBlur = 0;
-                            ctx.lineWidth = 3;
-                            ctx.strokeStyle = '#000000';
-                            ctx.fillStyle = '#FFFFFF';
-                            ctx.font = 'bold 12px Arial';
-                            ctx.textAlign = 'center';
+    players.forEach(([pid, p]) => {
+        // Skip players with invalid coordinates (null/undefined become 0 and cause centering issues)
+        if (p.x === null || p.x === undefined || p.y === null || p.y === undefined) {
+            return; // Skip this player
+        }
 
-                            ctx.strokeText(`ETA ${timeStr}`, sx, sy + 20);
-                            ctx.fillText(`ETA ${timeStr}`, sx, sy + 20);
+        const [sx, sy] = worldToScreen(p.x, p.y);
 
-                            if (lastData.timer && typeof lastData.timer.flight_time !== 'undefined') {
-                                const currentT = lastData.timer.flight_time || 0;
-                                const arrivalSec = currentT + timeSec;
-                                const tH = Math.floor(arrivalSec / 3600);
-                                const tM = Math.floor((arrivalSec % 3600) / 60);
-                                const tS = Math.floor(arrivalSec % 60);
-                                const tStr = `T+${tH.toString().padStart(2, '0')}:${tM.toString().padStart(2, '0')}:${tS.toString().padStart(2, '0')}`;
-                                ctx.strokeText(tStr, sx, sy + 35);
-                                ctx.fillText(tStr, sx, sy + 35);
-                            }
-                            ctx.restore();
-                        }
-                    }
+        // Calculate rotation from dx, dy
+        let rotation = 0;
+        if (p.dx !== undefined && p.dy !== undefined) {
+            if (Math.abs(p.dx) > 0.001 || Math.abs(p.dy) > 0.001) {
+                rotation = Math.atan2(p.dy, p.dx);
+            }
+        }
 
-                    // Distances
-                    if (i > 0) {
-                        const prev = planningWaypoints[i - 1];
-                        if (lastData && lastData.map_info) {
-                            const wW = lastData.map_info.map_max[0] - lastData.map_info.map_min[0];
-                            const wH = lastData.map_info.map_max[1] - lastData.map_info.map_min[1];
-                            const dx = (pt.x - prev.x) * wW;
-                            const dy = (pt.y - prev.y) * wH;
-                            const d = Math.hypot(dx, dy);
-                            totalDist += d;
+        // Calculate POI Bearing (if local player has one)
+        let poiBearing = undefined;
+        if (pid === '_local' && lastData.pois && Array.isArray(lastData.pois)) {
+            const myPoi = lastData.pois.find(poi => poi.owner === p.callsign);
+            if (myPoi) {
+                poiBearing = Math.atan2(myPoi.y - p.y, myPoi.x - p.x);
+            }
+        }
 
-                            const [px, py] = worldToScreen(prev.x, prev.y);
-                            const midX = (sx + px) / 2;
-                            const midY = (sy + py) / 2;
+        // Compass Rose (Local Player Only)
+        if (pid === '_local' && showCompassRose) {
+            // Collect Others
+            const others = [];
 
-                            const legDx = sx - px;
-                            const legDy = sy - py;
-                            const legLen = Math.hypot(legDx, legDy);
-                            const perpX = -legDy / legLen;
-                            const perpY = legDx / legLen;
+            // 1. Other Players
+            players.forEach(([otherPid, otherP]) => {
+                if (otherPid === '_local') return;
+                // Calculate bearing from Me to Them
+                const bearing = Math.atan2(otherP.y - p.y, otherP.x - p.x);
+                others.push({ type: 'player', bearing: bearing, color: otherP.color });
+            });
 
-                            const offset = 15;
-                            const lblX = midX + perpX * offset;
-                            const lblY = midY + perpY * offset;
-
-                            let distStr = "";
-                            if (userDistUnit === 'nm') {
-                                distStr = (d / 1852).toFixed(1);
-                            } else {
-                                distStr = (d / 1000).toFixed(1);
-                            }
-
-                            ctx.save();
-                            ctx.shadowBlur = 0;
-                            ctx.lineWidth = 3;
-                            ctx.strokeStyle = '#000000';
-                            ctx.fillStyle = '#FFFFFF';
-                            ctx.strokeText(distStr, lblX, lblY);
-                            ctx.fillText(distStr, lblX, lblY);
-                            ctx.restore();
-                        }
+            // 2. Other POIs (if owner known)
+            if (lastData.pois && Array.isArray(lastData.pois)) {
+                lastData.pois.forEach(poi => {
+                    if (poi.owner && poi.owner !== p.callsign) {
+                        // Line to THEIR poi
+                        const bearing = Math.atan2(poi.y - p.y, poi.x - p.x);
+                        others.push({ type: 'poi', bearing: bearing, color: poi.color });
                     }
                 });
+            }
 
-                // Total Dist Label at Last Point
-                if (totalDist > 0) {
-                    const last = planningWaypoints[planningWaypoints.length - 1];
-                    const [lx, ly] = worldToScreen(last.x, last.y);
-                    let totStr = "";
-                    if (userDistUnit === 'nm') {
-                        totStr = (totalDist / 1852).toFixed(1) + "nm";
+            try {
+                drawCompassRose(sx, sy, 100 * markerScale, rotation, p.color, poiBearing, others);
+            } catch (e) {
+                console.error("Compass Rose Error:", e);
+            }
+        }
+
+        // Trail
+        if (p.trail && p.trail.length > 0) {
+            ctx.beginPath();
+            ctx.strokeStyle = p.color || '#FFFFFF';
+            ctx.lineWidth = 2;
+            p.trail.forEach((pt, idx) => {
+                const [tx, ty] = worldToScreen(pt.x, pt.y);
+                if (idx === 0) ctx.moveTo(tx, ty);
+                else ctx.lineTo(tx, ty);
+            });
+            ctx.stroke();
+        }
+
+        // Draw Arrow (like PC overlay)
+        ctx.save();
+        ctx.translate(sx, sy);
+        ctx.rotate(rotation);
+
+        // Draw arrow shape with black outline
+        const markerColor = p.color || '#FFFF00';
+        const arrowSize = 12 * markerScale;
+
+        // Draw velocity vector if moving (starts from arrow tip, UNDER outline)
+        if (p.spd && p.spd > 10) {
+            const vectorLen = (p.spd * 0.05 * markerScale);  // Scale based on speed
+            ctx.save();
+            ctx.strokeStyle = markerColor;
+            ctx.lineWidth = 1.5 * markerScale;
+            ctx.beginPath();
+            ctx.moveTo(arrowSize, 0);  // Start from arrow tip
+            ctx.lineTo(arrowSize + vectorLen, 0);  // Extend outward along X axis (forward)
+            ctx.stroke();
+            ctx.restore();
+        }
+
+        // Draw arrow path (Must be defined AFTER velocity vector, as vector drawing clears path)
+        ctx.beginPath();
+        ctx.moveTo(arrowSize, 0);           // tip
+        ctx.lineTo(-arrowSize / 3, -arrowSize / 2);     // back left
+        ctx.lineTo(-arrowSize / 3, arrowSize / 2);      // back right
+        ctx.closePath();
+
+        // First pass: Black outline (thicker)
+        ctx.strokeStyle = '#000000';
+        ctx.lineWidth = 5 * markerScale;
+        ctx.stroke();
+
+        // Second pass: Colored stroke (thinner)
+        ctx.strokeStyle = markerColor;
+        ctx.lineWidth = 2.5 * markerScale;
+        ctx.stroke();
+
+        // Rotate back for text
+        ctx.rotate(-rotation);
+
+        // Callsign text (already rotated back to upright)
+        ctx.fillStyle = '#FFF';
+        ctx.strokeStyle = '#000000';
+        ctx.lineWidth = 3 * markerScale;
+        ctx.font = `bold ${12 * markerScale}px Arial`; // Standardized
+        ctx.textAlign = 'center'; // Explicitly center
+        const callsign = p.callsign || 'Unknown';
+
+        ctx.strokeText(callsign, 0, -20 * markerScale);
+        ctx.fillText(callsign, 0, -20 * markerScale); // Adjusted offset
+
+        // Altitude and Speed BELOW the marker arrow
+        // Format matches PC overlay: "speed altitude" (no units)
+        // Position text below the arrow tip (positive Y)
+        if (p.alt !== undefined || p.spd !== undefined) {
+            ctx.font = `bold ${12 * markerScale}px Arial`;  // Standardized
+            ctx.fillStyle = '#FFFFFF';  // White text
+            ctx.textAlign = 'center'; // Explicitly center
+
+            const altKm = (p.alt / 1000).toFixed(1);  // 1 decimal like PC
+            // Apply unit conversion like PC overlay
+            let spdDisplay = p.spd;
+            if (lastData.config && lastData.config.unit_is_kts) {
+                spdDisplay = p.spd * 0.539957;  // Convert km/h to knots
+            }
+            const statsText = `${Math.round(spdDisplay)} ${altKm}`;  // Speed first, like PC overlay
+
+            ctx.strokeText(statsText, 0, 28 * markerScale);
+            ctx.fillText(statsText, 0, 28 * markerScale);  // Adjusted offset
+        }
+
+
+
+        ctx.restore();
+    });
+
+    // --- DRAW PLANNING PATH (Top Z-Order - Above Icons) ---
+    if (planningWaypoints.length > 0) {
+        ctx.save();
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = '#00FFFF'; // Cyan
+        ctx.fillStyle = '#00FFFF';
+        ctx.font = 'bold 14px Arial';
+        ctx.textAlign = 'center';
+        ctx.shadowColor = 'black';
+        ctx.shadowBlur = 4;
+
+        // Draw Lines
+        ctx.beginPath();
+        planningWaypoints.forEach((pt, i) => {
+            const [sx, sy] = worldToScreen(pt.x, pt.y);
+            if (i === 0) ctx.moveTo(sx, sy);
+            else ctx.lineTo(sx, sy);
+        });
+        ctx.stroke();
+
+        // Draw Points & Text
+        let totalDist = 0;
+        planningWaypoints.forEach((pt, i) => {
+            const [sx, sy] = worldToScreen(pt.x, pt.y);
+
+            // Dot
+            ctx.beginPath();
+            ctx.fillStyle = '#00FFFF'; // Keep dots Cyan
+            ctx.arc(sx, sy, 5, 0, Math.PI * 2);
+            ctx.fill();
+
+            // --- Waypoint ETA (If Enabled) ---
+            if (showPoiEta && lastData && lastData.players && lastData.players['_local']) {
+                const localP = lastData.players['_local'];
+                const wW = lastData.map_info ? (lastData.map_info.map_max[0] - lastData.map_info.map_min[0]) : 65000;
+                const wH = lastData.map_info ? (lastData.map_info.map_max[1] - lastData.map_info.map_min[1]) : 65000;
+
+                let bestEtaDist = Infinity;
+                let cumPath0_i = 0;
+
+                for (let k = 1; k <= i; k++) {
+                    const p1 = planningWaypoints[k - 1];
+                    const p2 = planningWaypoints[k];
+                    cumPath0_i += Math.hypot((p2.x - p1.x) * wW, (p2.y - p1.y) * wH);
+                }
+
+                let runPath0_k = 0;
+                for (let k = 0; k <= i; k++) {
+                    if (k > 0) {
+                        const p1 = planningWaypoints[k - 1];
+                        const p2 = planningWaypoints[k];
+                        runPath0_k += Math.hypot((p2.x - p1.x) * wW, (p2.y - p1.y) * wH);
+                    }
+                    const distP_k = Math.hypot((planningWaypoints[k].x - localP.x) * wW, (planningWaypoints[k].y - localP.y) * wH);
+                    const cost = distP_k + (cumPath0_i - runPath0_k);
+                    if (cost < bestEtaDist) bestEtaDist = cost;
+                }
+
+                const speedKmh = (etaOverrideSpeed !== null) ? etaOverrideSpeed : (localP.spd || 0);
+                if (speedKmh > 10) {
+                    const speedMs = speedKmh / 3.6;
+                    const timeSec = bestEtaDist / speedMs;
+
+                    let timeStr = "";
+                    if (timeSec < 3600) {
+                        const m = Math.floor(timeSec / 60);
+                        const s = Math.floor(timeSec % 60);
+                        timeStr = `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
                     } else {
-                        totStr = (totalDist / 1000).toFixed(1) + "km";
+                        const h = Math.floor(timeSec / 3600);
+                        const m = Math.floor((timeSec % 3600) / 60);
+                        timeStr = `${h}:${m.toString().padStart(2, '0')}h`;
                     }
 
                     ctx.save();
                     ctx.shadowBlur = 0;
                     ctx.lineWidth = 3;
                     ctx.strokeStyle = '#000000';
-                    ctx.fillStyle = '#FFDD00';
-                    ctx.strokeText(`TOT: ${totStr}`, lx, ly + 60);
-                    ctx.fillText(`TOT: ${totStr}`, lx, ly + 60);
+                    ctx.fillStyle = '#FFFFFF';
+                    ctx.font = 'bold 12px Arial';
+                    ctx.textAlign = 'center';
+
+                    ctx.strokeText(`ETA ${timeStr}`, sx, sy + 20);
+                    ctx.fillText(`ETA ${timeStr}`, sx, sy + 20);
+
+                    if (lastData.timer && typeof lastData.timer.flight_time !== 'undefined') {
+                        const currentT = lastData.timer.flight_time || 0;
+                        const arrivalSec = currentT + timeSec;
+                        const tH = Math.floor(arrivalSec / 3600);
+                        const tM = Math.floor((arrivalSec % 3600) / 60);
+                        const tS = Math.floor(arrivalSec % 60);
+                        const tStr = `T+${tH.toString().padStart(2, '0')}:${tM.toString().padStart(2, '0')}:${tS.toString().padStart(2, '0')}`;
+                        ctx.strokeText(tStr, sx, sy + 35);
+                        ctx.fillText(tStr, sx, sy + 35);
+                    }
                     ctx.restore();
                 }
-                ctx.restore();
             }
 
-            drawLegend(ctx);
+            // Distances
+            if (i > 0) {
+                const prev = planningWaypoints[i - 1];
+                if (lastData && lastData.map_info) {
+                    const wW = lastData.map_info.map_max[0] - lastData.map_info.map_min[0];
+                    const wH = lastData.map_info.map_max[1] - lastData.map_info.map_min[1];
+                    const dx = (pt.x - prev.x) * wW;
+                    const dy = (pt.y - prev.y) * wH;
+                    const d = Math.hypot(dx, dy);
+                    totalDist += d;
+
+                    const [px, py] = worldToScreen(prev.x, prev.y);
+                    const midX = (sx + px) / 2;
+                    const midY = (sy + py) / 2;
+
+                    const legDx = sx - px;
+                    const legDy = sy - py;
+                    const legLen = Math.hypot(legDx, legDy);
+                    const perpX = -legDy / legLen;
+                    const perpY = legDx / legLen;
+
+                    const offset = 15;
+                    const lblX = midX + perpX * offset;
+                    const lblY = midY + perpY * offset;
+
+                    let distStr = "";
+                    if (userDistUnit === 'nm') {
+                        distStr = (d / 1852).toFixed(1);
+                    } else {
+                        distStr = (d / 1000).toFixed(1);
+                    }
+
+                    ctx.save();
+                    ctx.shadowBlur = 0;
+                    ctx.lineWidth = 3;
+                    ctx.strokeStyle = '#000000';
+                    ctx.fillStyle = '#FFFFFF';
+                    ctx.strokeText(distStr, lblX, lblY);
+                    ctx.fillText(distStr, lblX, lblY);
+                    ctx.restore();
+                }
+            }
+        });
+
+        // Total Dist Label at Last Point
+        if (totalDist > 0) {
+            const last = planningWaypoints[planningWaypoints.length - 1];
+            const [lx, ly] = worldToScreen(last.x, last.y);
+            let totStr = "";
+            if (userDistUnit === 'nm') {
+                totStr = (totalDist / 1852).toFixed(1) + "nm";
+            } else {
+                totStr = (totalDist / 1000).toFixed(1) + "km";
+            }
+
+            ctx.save();
+            ctx.shadowBlur = 0;
+            ctx.lineWidth = 3;
+            ctx.strokeStyle = '#000000';
+            ctx.fillStyle = '#FFDD00';
+            ctx.strokeText(`TOT: ${totStr}`, lx, ly + 60);
+            ctx.fillText(`TOT: ${totStr}`, lx, ly + 60);
             ctx.restore();
+        }
+        ctx.restore();
+    }
 
-            // --- Scale Bar (Ruler Style) ---
-            if (worldWidth > 0) {
-                const mapSizeM = worldWidth;
-                const refW = REFERENCE_MAP_SIZE;
-                const refH = REFERENCE_MAP_SIZE;
+    drawLegend(ctx);
+    ctx.restore();
 
-                const pixelsPerKm = (mapDrawW * dpr / worldWidth) * 1000;
-                // 1 NM = 1.852 km. Pixels per NM is larger.
-                const pixelsPerNm = pixelsPerKm * 1.852;
+    // --- Scale Bar (Ruler Style) ---
+    if (worldWidth > 0) {
+        const mapSizeM = worldWidth;
+        const refW = REFERENCE_MAP_SIZE;
+        const refH = REFERENCE_MAP_SIZE;
 
-                // --- KM Ruler Calculation ---
-                // Target 600px width
-                let targetPx = 600 * markerScale;
-                if (targetPx < 300) targetPx = 300;
+        const pixelsPerKm = (mapDrawW * dpr / worldWidth) * 1000;
+        // 1 NM = 1.852 km. Pixels per NM is larger.
+        const pixelsPerNm = pixelsPerKm * 1.852;
 
-                let candidateKm = targetPx / pixelsPerKm;
+        // --- KM Ruler Calculation ---
+        // Target 600px width
+        let targetPx = 600 * markerScale;
+        if (targetPx < 300) targetPx = 300;
 
-                let maxKm = 10;
-                // Extended steps for high zoom
-                const steps = [0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000];
-                for (let s of steps) {
-                    if (s >= candidateKm * 0.8) {
-                        maxKm = s;
-                        break;
-                    }
-                }
+        let candidateKm = targetPx / pixelsPerKm;
 
-                const barWidth = maxKm * pixelsPerKm;
-
-                // --- NM Ruler Calculation (Secondary) ---
-                // We want it to be roughly same physical width, but using NM steps
-                let candidateNm = targetPx / pixelsPerNm;
-                let maxNm = 5;
-                const nmSteps = [0.25, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2500];
-                for (let s of nmSteps) {
-                    if (s >= candidateNm * 0.8) {
-                        maxNm = s;
-                        break;
-                    }
-                }
-                const nmBarWidth = maxNm * pixelsPerNm;
-
-
-                // Position: High Bottom Right
-                // Need space for TWO rulers + Grid Label + Map Label
-                // Move up more? 180 was good for 1 ruler. Let's maximize space.
-                let barX = canvas.width - barWidth - 60;
-                let barY = canvas.height - 280; // Reduced from 380px
-
-                if (barX < 20) barX = 20;
-                if (barY < 50) barY = 50;
-
-                const sizeMult = 2.0;
-                const lineMult = 3.0;
-
-                const scaledLineWidth = Math.max(3, 2 * markerScale * lineMult);
-                const scaledFontSize = Math.max(20, 12 * markerScale * sizeMult);
-
-                ctx.save();
-                ctx.lineCap = 'butt';
-                ctx.font = `bold ${scaledFontSize}px Arial`;
-                ctx.textAlign = 'center';
-                ctx.textBaseline = 'bottom';
-                const tickLen = scaledFontSize * 0.6;
-
-                // --- DRAW KM RULER (Top) ---
-
-                // Base Line
-                ctx.beginPath();
-                ctx.moveTo(barX, barY);
-                ctx.lineTo(barX + barWidth, barY);
-                ctx.strokeStyle = 'black';
-                ctx.lineWidth = scaledLineWidth + 2;
-                ctx.stroke();
-
-                ctx.strokeStyle = 'white';
-                ctx.lineWidth = scaledLineWidth; // Inner white
-                ctx.stroke();
-
-                // KM Ticks
-                let tickMarks = [];
-                // Expanded logic for missing 100km ticks
-                if (maxKm <= 1) tickMarks = [0, 0.5, 1];
-                else if (maxKm <= 5) tickMarks = [0, 1, 2, 5];
-                else if (maxKm <= 10) tickMarks = [0, 1, 5, 10];
-                else if (maxKm <= 20) tickMarks = [0, 5, 10, 20];
-                else if (maxKm <= 50) tickMarks = [0, 10, 25, 50];
-                else if (maxKm <= 100) tickMarks = [0, 25, 50, 75, 100];
-                else if (maxKm <= 200) tickMarks = [0, 50, 100, 150, 200];
-                else if (maxKm <= 500) tickMarks = [0, 100, 250, 500];
-                else if (maxKm <= 1000) tickMarks = [0, 250, 500, 750, 1000];
-                else tickMarks = [0, maxKm / 2, maxKm];
-
-                tickMarks = tickMarks.filter(k => k <= maxKm);
-
-                tickMarks.forEach(km => {
-                    const pxOffset = km * pixelsPerKm;
-                    const tickX = (barX + barWidth) - pxOffset;
-
-                    // Tick (Upwards)
-                    ctx.beginPath();
-                    ctx.moveTo(tickX, barY);
-                    ctx.lineTo(tickX, barY - tickLen);
-                    ctx.strokeStyle = 'black';
-                    ctx.lineWidth = scaledLineWidth + 2;
-                    ctx.stroke();
-
-                    ctx.strokeStyle = 'white';
-                    ctx.lineWidth = scaledLineWidth;
-                    ctx.stroke();
-
-                    // Label
-                    let label = `${km}`;
-                    if (km === 0) label = "0";
-                    const labelY = barY - tickLen - 6;
-
-                    ctx.strokeStyle = 'black';
-                    ctx.lineWidth = 3;
-                    ctx.strokeText(label, tickX, labelY);
-                    ctx.fillStyle = 'white';
-                    ctx.fillText(label, tickX, labelY);
-                });
-
-                // "km" Label
-                ctx.textAlign = 'left';
-                const labelY = barY - tickLen - 6;
-                ctx.strokeText("km", barX + barWidth + (10 * markerScale), labelY);
-                ctx.fillText("km", barX + barWidth + (10 * markerScale), labelY);
-
-                // --- Commander Drawings ---
-                if (false && lastData && lastData.commander && lastData.commander.drawings) {
-                    ctx.save();
-                    ctx.lineCap = 'round';
-                    ctx.lineJoin = 'round';
-
-                    lastData.commander.drawings.forEach(d => {
-                        if (!d.points || d.points.length < 2) return;
-
-                        ctx.beginPath();
-                        ctx.strokeStyle = d.color || '#FFFF00';
-                        ctx.lineWidth = 3 * markerScale;
-
-                        let first = true;
-                        for (let p of d.points) {
-                            const [sx, sy] = Transformer.worldToScreen(p[0], p[1]);
-                            if (first) { ctx.moveTo(sx, sy); first = false; }
-                            else { ctx.lineTo(sx, sy); }
-                        }
-                        ctx.stroke();
-                    });
-                    ctx.restore();
-                }
-
-                // Current Stroke
-                if (false && currentStroke) { // Legacy Loop Disabled
-                    ctx.save();
-                    ctx.lineCap = 'round';
-                    ctx.lineJoin = 'round';
-                    ctx.beginPath();
-                    ctx.strokeStyle = currentStroke.color;
-                    ctx.lineWidth = 3 * markerScale;
-
-                    let first = true;
-                    for (let p of currentStroke.points) {
-                        const [sx, sy] = Transformer.worldToScreen(p[0], p[1]);
-                        if (first) { ctx.moveTo(sx, sy); first = false; }
-                        else { ctx.lineTo(sx, sy); }
-                    }
-                    ctx.stroke();
-                    ctx.restore();
-                }
-
-                // --- Commander Mode Rendering ---
-
-
-                // --- DRAW NM RULER (Bottom) ---
-                // Positioned below KM ruler.
-                const nmBarY = barY + 75; // Gap 75px
-
-                // Align Right Edge with KM Ruler
-                // Start X = (barX + barWidth) - nmBarWidth
-                const nmBarX = (barX + barWidth) - nmBarWidth;
-
-                // Base Line
-                ctx.beginPath();
-                ctx.moveTo(nmBarX, nmBarY);
-                ctx.lineTo(barX + barWidth, nmBarY); // End at aligned right
-                ctx.strokeStyle = 'black';
-                ctx.lineWidth = scaledLineWidth + 2;
-                ctx.stroke();
-
-                ctx.strokeStyle = 'white';
-                ctx.lineWidth = scaledLineWidth;
-                ctx.stroke();
-
-                // NM Ticks
-                let nmTicks = [];
-                if (maxNm <= 1) nmTicks = [0, 0.5, 1];
-                else if (maxNm <= 5) nmTicks = [0, 1, 2, 5];
-                else if (maxNm <= 10) nmTicks = [0, 2, 5, 10];
-                else if (maxNm <= 20) nmTicks = [0, 5, 10, 20];
-                else if (maxNm <= 50) nmTicks = [0, 10, 25, 50];
-                else if (maxNm <= 100) nmTicks = [0, 25, 50, 100];
-                else if (maxNm <= 200) nmTicks = [0, 50, 100, 200];
-                else if (maxNm <= 500) nmTicks = [0, 100, 250, 500];
-                else nmTicks = [0, maxNm / 2, maxNm];
-
-                nmTicks = nmTicks.filter(n => n <= maxNm);
-
-                ctx.textAlign = 'center';
-
-                nmTicks.forEach(nm => {
-                    const pxOffset = nm * pixelsPerNm;
-                    const tickX = (barX + barWidth) - pxOffset;
-
-                    // Tick (Upwards from NM line? Or Downwards?)
-                    // Overlay does Upwards usually? Let's do Upwards again.
-                    ctx.beginPath();
-                    ctx.moveTo(tickX, nmBarY);
-                    ctx.lineTo(tickX, nmBarY - tickLen);
-                    ctx.strokeStyle = 'black';
-                    ctx.lineWidth = scaledLineWidth + 2;
-                    ctx.stroke();
-
-                    ctx.strokeStyle = 'white';
-                    ctx.lineWidth = scaledLineWidth;
-                    ctx.stroke();
-
-                    // Label (Above tick, might conflict with KM ruler?
-                    // KM ruler is at barY. NM ruler is at barY + 45.
-                    // Ticks go up to barY + 45 - tickLen.
-                    // Labels at barY + 45 - tickLen - 6.
-                    // If tickLen is large, it might hit KM ruler layout.
-                    // Let's put NM labels BELOW the NM line?
-                    // Or keep above? 45px gap should be enough for label height.
-
-                    let label = `${nm}`;
-                    if (nm === 0) label = "0";
-
-                    // Draw Label ABOVE like Overlay
-                    const lblY = nmBarY - tickLen - 6;
-
-                    ctx.strokeStyle = 'black';
-                    ctx.lineWidth = 3;
-                    ctx.strokeText(label, tickX, lblY);
-                    ctx.fillStyle = 'white';
-                    ctx.fillText(label, tickX, lblY);
-                });
-
-                // "NM" Label
-                ctx.textAlign = 'left';
-                const nmLblY = nmBarY - tickLen - 6;
-                ctx.strokeText("NM", barX + barWidth + (10 * markerScale), nmLblY);
-                ctx.fillText("NM", barX + barWidth + (10 * markerScale), nmLblY);
-
-
-                // --- Grid & Map Labels ---
-                const gridKm = (worldWidth / 8) / 1000;
-                const gridNm = gridKm * 0.539957;
-
-                ctx.textAlign = 'right';
-                const gridText = `${gridKm.toFixed(2)} km = ${gridNm.toFixed(2)} NM`;
-
-                const infoLabelX = barX + barWidth;
-                // Below NM Ruler
-                const infoLabelY = nmBarY + 45;
-
-                ctx.strokeText(gridText, infoLabelX, infoLabelY);
-                ctx.fillText(gridText, infoLabelX, infoLabelY);
-
-                const mapKm = worldWidth / 1000;
-                const mapNm = mapKm * 0.539957;
-                const mapText = `Map: ${mapKm.toFixed(0)}km / ${mapNm.toFixed(0)}NM`;
-
-                ctx.fillStyle = 'white';
-                ctx.strokeStyle = 'black';
-
-                const mapLabelY = infoLabelY + scaledFontSize + 5;
-                ctx.strokeText(mapText, infoLabelX, mapLabelY);
-                ctx.fillText(mapText, infoLabelX, mapLabelY);
-
-                ctx.restore();
+        let maxKm = 10;
+        // Extended steps for high zoom
+        const steps = [0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000];
+        for (let s of steps) {
+            if (s >= candidateKm * 0.8) {
+                maxKm = s;
+                break;
             }
-
-            // --- Commander Mode Rendering ---
-            // (Duplicate Commander Loop Removed)
-
-
         }
 
-        // Start Loops
-        resize();
-        // setInterval(fetchData, 100); // Disabled preventing race condition
-        fetchData(); // Start recursive loop
-        setInterval(loadMap, 30000);  // Refresh map every 30s
+        const barWidth = maxKm * pixelsPerKm;
+
+        // --- NM Ruler Calculation (Secondary) ---
+        // We want it to be roughly same physical width, but using NM steps
+        let candidateNm = targetPx / pixelsPerNm;
+        let maxNm = 5;
+        const nmSteps = [0.25, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2500];
+        for (let s of nmSteps) {
+            if (s >= candidateNm * 0.8) {
+                maxNm = s;
+                break;
+            }
+        }
+        const nmBarWidth = maxNm * pixelsPerNm;
+
+
+        // Position: High Bottom Right
+        // Need space for TWO rulers + Grid Label + Map Label
+        // Move up more? 180 was good for 1 ruler. Let's maximize space.
+        let barX = canvas.width - barWidth - 60;
+        let barY = canvas.height - 280; // Reduced from 380px
+
+        if (barX < 20) barX = 20;
+        if (barY < 50) barY = 50;
+
+        const sizeMult = 2.0;
+        const lineMult = 3.0;
+
+        const scaledLineWidth = Math.max(3, 2 * markerScale * lineMult);
+        const scaledFontSize = Math.max(20, 12 * markerScale * sizeMult);
+
+        ctx.save();
+        ctx.lineCap = 'butt';
+        ctx.font = `bold ${scaledFontSize}px Arial`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'bottom';
+        const tickLen = scaledFontSize * 0.6;
+
+        // --- DRAW KM RULER (Top) ---
+
+        // Base Line
+        ctx.beginPath();
+        ctx.moveTo(barX, barY);
+        ctx.lineTo(barX + barWidth, barY);
+        ctx.strokeStyle = 'black';
+        ctx.lineWidth = scaledLineWidth + 2;
+        ctx.stroke();
+
+        ctx.strokeStyle = 'white';
+        ctx.lineWidth = scaledLineWidth; // Inner white
+        ctx.stroke();
+
+        // KM Ticks
+        let tickMarks = [];
+        // Expanded logic for missing 100km ticks
+        if (maxKm <= 1) tickMarks = [0, 0.5, 1];
+        else if (maxKm <= 5) tickMarks = [0, 1, 2, 5];
+        else if (maxKm <= 10) tickMarks = [0, 1, 5, 10];
+        else if (maxKm <= 20) tickMarks = [0, 5, 10, 20];
+        else if (maxKm <= 50) tickMarks = [0, 10, 25, 50];
+        else if (maxKm <= 100) tickMarks = [0, 25, 50, 75, 100];
+        else if (maxKm <= 200) tickMarks = [0, 50, 100, 150, 200];
+        else if (maxKm <= 500) tickMarks = [0, 100, 250, 500];
+        else if (maxKm <= 1000) tickMarks = [0, 250, 500, 750, 1000];
+        else tickMarks = [0, maxKm / 2, maxKm];
+
+        tickMarks = tickMarks.filter(k => k <= maxKm);
+
+        tickMarks.forEach(km => {
+            const pxOffset = km * pixelsPerKm;
+            const tickX = (barX + barWidth) - pxOffset;
+
+            // Tick (Upwards)
+            ctx.beginPath();
+            ctx.moveTo(tickX, barY);
+            ctx.lineTo(tickX, barY - tickLen);
+            ctx.strokeStyle = 'black';
+            ctx.lineWidth = scaledLineWidth + 2;
+            ctx.stroke();
+
+            ctx.strokeStyle = 'white';
+            ctx.lineWidth = scaledLineWidth;
+            ctx.stroke();
+
+            // Label
+            let label = `${km}`;
+            if (km === 0) label = "0";
+            const labelY = barY - tickLen - 6;
+
+            ctx.strokeStyle = 'black';
+            ctx.lineWidth = 3;
+            ctx.strokeText(label, tickX, labelY);
+            ctx.fillStyle = 'white';
+            ctx.fillText(label, tickX, labelY);
+        });
+
+        // "km" Label
+        ctx.textAlign = 'left';
+        const labelY = barY - tickLen - 6;
+        ctx.strokeText("km", barX + barWidth + (10 * markerScale), labelY);
+        ctx.fillText("km", barX + barWidth + (10 * markerScale), labelY);
+
+        // --- Commander Drawings ---
+        if (false && lastData && lastData.commander && lastData.commander.drawings) {
+            ctx.save();
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+
+            lastData.commander.drawings.forEach(d => {
+                if (!d.points || d.points.length < 2) return;
+
+                ctx.beginPath();
+                ctx.strokeStyle = d.color || '#FFFF00';
+                ctx.lineWidth = 3 * markerScale;
+
+                let first = true;
+                for (let p of d.points) {
+                    const [sx, sy] = Transformer.worldToScreen(p[0], p[1]);
+                    if (first) { ctx.moveTo(sx, sy); first = false; }
+                    else { ctx.lineTo(sx, sy); }
+                }
+                ctx.stroke();
+            });
+            ctx.restore();
+        }
+
+        // Current Stroke
+        if (false && currentStroke) { // Legacy Loop Disabled
+            ctx.save();
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            ctx.beginPath();
+            ctx.strokeStyle = currentStroke.color;
+            ctx.lineWidth = 3 * markerScale;
+
+            let first = true;
+            for (let p of currentStroke.points) {
+                const [sx, sy] = Transformer.worldToScreen(p[0], p[1]);
+                if (first) { ctx.moveTo(sx, sy); first = false; }
+                else { ctx.lineTo(sx, sy); }
+            }
+            ctx.stroke();
+            ctx.restore();
+        }
+
+        // --- Commander Mode Rendering ---
+
+
+        // --- DRAW NM RULER (Bottom) ---
+        // Positioned below KM ruler.
+        const nmBarY = barY + 75; // Gap 75px
+
+        // Align Right Edge with KM Ruler
+        // Start X = (barX + barWidth) - nmBarWidth
+        const nmBarX = (barX + barWidth) - nmBarWidth;
+
+        // Base Line
+        ctx.beginPath();
+        ctx.moveTo(nmBarX, nmBarY);
+        ctx.lineTo(barX + barWidth, nmBarY); // End at aligned right
+        ctx.strokeStyle = 'black';
+        ctx.lineWidth = scaledLineWidth + 2;
+        ctx.stroke();
+
+        ctx.strokeStyle = 'white';
+        ctx.lineWidth = scaledLineWidth;
+        ctx.stroke();
+
+        // NM Ticks
+        let nmTicks = [];
+        if (maxNm <= 1) nmTicks = [0, 0.5, 1];
+        else if (maxNm <= 5) nmTicks = [0, 1, 2, 5];
+        else if (maxNm <= 10) nmTicks = [0, 2, 5, 10];
+        else if (maxNm <= 20) nmTicks = [0, 5, 10, 20];
+        else if (maxNm <= 50) nmTicks = [0, 10, 25, 50];
+        else if (maxNm <= 100) nmTicks = [0, 25, 50, 100];
+        else if (maxNm <= 200) nmTicks = [0, 50, 100, 200];
+        else if (maxNm <= 500) nmTicks = [0, 100, 250, 500];
+        else nmTicks = [0, maxNm / 2, maxNm];
+
+        nmTicks = nmTicks.filter(n => n <= maxNm);
+
+        ctx.textAlign = 'center';
+
+        nmTicks.forEach(nm => {
+            const pxOffset = nm * pixelsPerNm;
+            const tickX = (barX + barWidth) - pxOffset;
+
+            // Tick (Upwards from NM line? Or Downwards?)
+            // Overlay does Upwards usually? Let's do Upwards again.
+            ctx.beginPath();
+            ctx.moveTo(tickX, nmBarY);
+            ctx.lineTo(tickX, nmBarY - tickLen);
+            ctx.strokeStyle = 'black';
+            ctx.lineWidth = scaledLineWidth + 2;
+            ctx.stroke();
+
+            ctx.strokeStyle = 'white';
+            ctx.lineWidth = scaledLineWidth;
+            ctx.stroke();
+
+            // Label (Above tick, might conflict with KM ruler?
+            // KM ruler is at barY. NM ruler is at barY + 45.
+            // Ticks go up to barY + 45 - tickLen.
+            // Labels at barY + 45 - tickLen - 6.
+            // If tickLen is large, it might hit KM ruler layout.
+            // Let's put NM labels BELOW the NM line?
+            // Or keep above? 45px gap should be enough for label height.
+
+            let label = `${nm}`;
+            if (nm === 0) label = "0";
+
+            // Draw Label ABOVE like Overlay
+            const lblY = nmBarY - tickLen - 6;
+
+            ctx.strokeStyle = 'black';
+            ctx.lineWidth = 3;
+            ctx.strokeText(label, tickX, lblY);
+            ctx.fillStyle = 'white';
+            ctx.fillText(label, tickX, lblY);
+        });
+
+        // "NM" Label
+        ctx.textAlign = 'left';
+        const nmLblY = nmBarY - tickLen - 6;
+        ctx.strokeText("NM", barX + barWidth + (10 * markerScale), nmLblY);
+        ctx.fillText("NM", barX + barWidth + (10 * markerScale), nmLblY);
+
+
+        // --- Grid & Map Labels ---
+        const gridKm = (worldWidth / 8) / 1000;
+        const gridNm = gridKm * 0.539957;
+
+        ctx.textAlign = 'right';
+        const gridText = `${gridKm.toFixed(2)} km = ${gridNm.toFixed(2)} NM`;
+
+        const infoLabelX = barX + barWidth;
+        // Below NM Ruler
+        const infoLabelY = nmBarY + 45;
+
+        ctx.strokeText(gridText, infoLabelX, infoLabelY);
+        ctx.fillText(gridText, infoLabelX, infoLabelY);
+
+        const mapKm = worldWidth / 1000;
+        const mapNm = mapKm * 0.539957;
+        const mapText = `Map: ${mapKm.toFixed(0)}km / ${mapNm.toFixed(0)}NM`;
+
+        ctx.fillStyle = 'white';
+        ctx.strokeStyle = 'black';
+
+        const mapLabelY = infoLabelY + scaledFontSize + 5;
+        ctx.strokeText(mapText, infoLabelX, mapLabelY);
+        ctx.fillText(mapText, infoLabelX, mapLabelY);
+
+        ctx.restore();
+    }
+
+    // --- Commander Mode Rendering ---
+    // (Duplicate Commander Loop Removed)
+
+
+}
+
+// Start Loops
+resize();
+// setInterval(fetchData, 100); // Disabled preventing race condition
+fetchData(); // Start recursive loop
+setInterval(loadMap, 30000);  // Refresh map every 30s

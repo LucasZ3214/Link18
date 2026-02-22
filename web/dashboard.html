@@ -10,6 +10,9 @@
 
 <body>
     <div id="status">Connecting...</div>
+    <div id="activeCommanderDisplay"
+        style="position: fixed; top: 15px; right: 20px; color: #ffcc00; font-family: Arial, sans-serif; font-size: 16px; font-weight: bold; background: rgba(0, 0, 0, 0.7); padding: 8px 15px; border-radius: 6px; z-index: 1000; border: 2px solid #ffcc00; display: none; box-shadow: 0 0 10px rgba(255, 204, 0, 0.3);">
+        Commander: None</div>
     <div id="topToolbar">
         <button id="compassRoseBtn" class="toolbar-btn" onclick="toggleCompassRose()" title="Toggle Compass Rose">
             <!-- SVG Compass -->
@@ -108,35 +111,14 @@
         <!-- AWACS / Commander Mode -->
         <div style="display: flex; gap: 10px; align-items: flex-start;">
             <button id="commanderBtn" class="toolbar-btn" onclick="toggleCommanderMode()"
-                title="AWACS / Commander Mode">
-                <!-- Scanning Radar Icon -->
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                    stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M12 20a8 8 0 1 0 0-16 8 8 0 0 0 0 16z"></path>
-                    <path d="M12 12L16 8"></path>
-                    <path d="M12 2v2"></path>
-                    <path d="M12 20v2"></path>
-                    <path d="M2.05 10h2"></path>
-                    <path d="M19.95 10h2"></path>
-                    <!-- Sweep Line (Animated-ish look) -->
-                    <path d="M12 12 L17 17 M12 12 L7 17" opacity="0.5"></path>
-                </svg>
+                title="AWACS / Commander Mode(COM)">
+                <span style="font-weight: bold; font-family: sans-serif; font-size: 14px;">COM</span>
             </button>
             <div id="commanderTools" style="display: none; flex-direction: column; gap: 10px;">
-                <!-- Fighter Marker (Draggable Source) -->
-                <div class="toolbar-btn" id="fighterDragSource" draggable="true"
-                    ondragstart="dragStartMarker(event, 'fighter')" title="Drag Fighter">
-                    <!-- NATO Air Friendly Icon -->
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="cyan" stroke-width="2">
-                        <!-- Frame: Rectangle -->
-                        <rect x="2" y="6" width="20" height="12" stroke="cyan" fill="rgba(0,255,255,0.1)"></rect>
-                        <!-- Symbol: Infinity (Fixed Wing) -->
-                        <path d="M7 12 C7 10, 9 10, 10 11 S 12 14, 12 14 S 13 10, 15 10 S 17 12, 17 12" stroke="cyan"
-                            fill="none"></path>
-                        <path d="M7 12 C7 14, 9 14, 10 13" stroke="cyan" fill="none"></path>
-                        <path d="M17 12 C17 14, 15 14, 14 13" stroke="cyan" fill="none"></path>
-                    </svg>
-                </div>
+                <!-- Fighter Marker (Click to Place) -->
+                <button id="fighterBtn" class="toolbar-btn" onclick="toggleFighterMode()" title="Place Fighter">
+                    <span style="font-weight: bold; font-family: sans-serif; font-size: 16px; color: cyan;">F</span>
+                </button>
                 <!-- Pen Tool -->
                 <button id="penToolBtn" class="toolbar-btn" onclick="togglePenTool()" title="Pen Tool">
                     <!-- Pencil Icon -->

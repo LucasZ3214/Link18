@@ -432,6 +432,30 @@ class OverlayWindow(RenderingMixin, GbuHudMixin, QWidget):
 
                 elif cmd_type == 'cmd_drawing_clear':
                     self.shared_data['commander']['drawings'] = []
+                    self.shared_data['commander']['markers'] = []
+
+                elif cmd_type == 'place_marker':
+                    m_type = cmd.get('marker_type')
+                    x = cmd.get('x')
+                    y = cmd.get('y')
+                    if m_type and x is not None and y is not None:
+                        new_id = f"{m_type}_{int(time.time()*1000)}"
+                        self.shared_data['commander']['markers'].append({
+                            'id': new_id,
+                            'type': m_type,
+                            'x': x,
+                            'y': y,
+                            'callsign': cmd.get('callsign', 'Fighter')
+                        })
+                        print(f"[CMD] Placed {m_type} marker at {x:.3f}, {y:.3f}")
+
+                elif cmd_type == 'cmd_marker_update':
+                    m_data = cmd.get('data')
+                    if m_data and 'id' in m_data:
+                        for idx, m in enumerate(self.shared_data['commander']['markers']):
+                            if m['id'] == m_data['id']:
+                                self.shared_data['commander']['markers'][idx] = m_data
+                                break
 
                 elif cmd_type == 'set_formation':
                     val = cmd.get('value', False)
@@ -444,6 +468,22 @@ class OverlayWindow(RenderingMixin, GbuHudMixin, QWidget):
                     self.planning_waypoints = cmd.get('waypoints', [])
                     print(f"[PLAN] Updated {len(self.planning_waypoints)} waypoints from Web UI")
                     self.update()
+
+                elif cmd_type == 'claim_commander':
+                    req_callsign = cmd.get('callsign', 'Unknown')
+                    current_cmd = self.shared_data['commander'].get('active_commander')
+                    if not current_cmd or current_cmd == req_callsign:
+                        self.shared_data['commander']['active_commander'] = req_callsign
+                        print(f"[CMD] Commander assigned to: {req_callsign}")
+                    else:
+                        print(f"[CMD] Reject claim by {req_callsign} - {current_cmd} is already commander")
+
+                elif cmd_type == 'release_commander':
+                    req_callsign = cmd.get('callsign', 'Unknown')
+                    current_cmd = self.shared_data['commander'].get('active_commander')
+                    if current_cmd == req_callsign:
+                        self.shared_data['commander']['active_commander'] = None
+                        print(f"[CMD] Commander released by: {req_callsign}")
 
     # ─────────────────────────────────────────────
     # Airfield / Map Reference
