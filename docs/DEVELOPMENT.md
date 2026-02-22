@@ -4,42 +4,41 @@
 
 ```
 Link18/
-├── main.py              # Core overlay + network logic 
-├── jdamertti.py         # Standalone JDAM physics simulator
-├── vws.py               # Voice Warning System (audio alerts)
-├── web_server.py        # Flask server for web map API
-├── auto_calibrate_new.py# Map calibration logic (CV-based)
-├── create_release.py    # Release automation script
-├── sounds/              # VWS audio files
-│   ├── vws_sam.wav      # SAM warning audio
-│   ├── vws_aaa.wav      # AAA warning audio
-│   └── welcome/         # Random startup greetings
-├── web/
-│   └── dashboard.html   # Web map UI (Canvas-based)
-├── config.json          # User configuration
-├── vehicles.json        # Vehicle name translation map
-├── Link18.spec          # PyInstaller build spec
-└── requirements.txt     # Python dependencies
+├── main.py              # Entry point: Initializes app, tray, and server threads
+├── overlay.py           # Core Logic: Central class combining all mixins/states
+├── config.py / .json    # Configuration: Dynamic settings and fallback values
+├── rendering.py         # Drawing: RenderingMixin for map and HUD elements
+├── gbu_hud.py           # Simulation: GbuHudMixin for bomb tracking display
+├── network.py           # Connectivity: TelemetryFetcher and UDP networking
+├── web_server.py        # Dashboard: Standalone server for web map API
+├── jdamertti.py         # Physics: GBU-62 simulation engine
+├── ui.py                # UI Components: Custom widgets and trays
+├── key_monitor.py       # Input: Global keyboard shortcuts
+├── vws.py               # Audio: Voice Warning System alerts
+├── auto_calibrate_new.py# Calibration: OpenCV-based map alignment
+├── vehicles.json        # Translation: Vehicle ID to real name map
+├── Link18.spec          # Build: PyInstaller specification
+└── requirements.txt     # Deps: Python dependencies
 ```
 
 ### JDAM Simulation Architecture (`jdamertti.py`)
 
-The GBU-62/JDAM-ER simulation is now a self-contained module:
+The GBU-62/JDAM-ER simulation is a self-contained engine:
 - **Physics**: Implements 3-DOF kinematics with drag/lift modulation.
 - **Modes**:
     - **Steep Dive**: High-drag/high-AOA mode for short-range drops.
     - **Max Range**: Glide-optimization mode for long-distance strikes.
     - **Standard**: Balanced profile.
-- **Integration**: `main.py` instantiates `BombTracker` which manages multiple `GBU62_Simulator` instances.
-- **Tuning**: All physics constants (Drag, Lift, Pitch Schedules) are defined at the top of `jdamertti.py`.
+- **Integration**: `overlay.py` instantiates `BombTracker` (from `jdamertti.py`) which manages multiple `GBU62_Simulator` instances.
+- **Tuning**: All physics constants are defined at the top of `jdamertti.py`.
 
 
 ### Architecture Overview
 
 ```
 ┌─────────────────┐     UDP Broadcast      ┌─────────────────┐
-│   Link18 App    │◄─────────────────────► │  Other Players  │
-│   (main.py)     │      Port 50050        │                 │
+│  Overlay Core   │◄─────────────────────► │  Other Players  │
+│  (overlay.py)   │      Port 50050        │                 │
 └────────┬────────┘                        └─────────────────┘
          │
          │ HTTP API (localhost:8111)
@@ -57,15 +56,19 @@ The GBU-62/JDAM-ER simulation is now a self-contained module:
 └─────────────────┘
 ```
 
-### Key Classes (main.py)
+### Key Classes and Mixins
 
-| Class | Purpose |
-|-------|---------|
-| `OverlayWindow` | Main transparent overlay, handles painting, telemetry processing, network |
-| `TelemetryFetcher` | Background thread for HTTP polling (prevents audio stutter) |
-| `NetworkReceiver` | UDP listener thread for incoming packets |
-| `KeyMonitor` | Keyboard listener. Handles 'M' (Show) and 'M+N' (Calibrate) |
-| `ControllerWindow` | Small control panel window |
+The application uses a Mixin-based architecture to separate concerns while maintaining a single cohesive `OverlayWindow`.
+
+| Module | Class/Mixin | Purpose |
+|--------|-------------|---------|
+| `overlay.py` | `OverlayWindow` | Central orchestrator. Manages state, life-cycle, and coordination. |
+| `rendering.py` | `RenderingMixin` | Specialized UI drawing (Map, Players, Scale, POIs). |
+| `gbu_hud.py` | `GbuHudMixin` | Specialized UI drawing for bomb simulations. |
+| `network.py` | `TelemetryFetcher` | Background thread for WT HTTP polling. |
+| `network.py` | `NetworkReceiver` | UDP listener thread for squad coordination data. |
+| `key_monitor.py` | `KeyMonitor` | Global keyboard listener for shortcuts. |
+| `ui.py` | `TrayController` | System tray integration and application management. |
 
 ### Voice Warning System (`vws.py`)
 
@@ -77,14 +80,15 @@ The VWS module provides audio alerts for threats:
 
 ### Data Flow
 
-1. **Telemetry Fetch**: `TelemetryFetcher` (background thread) polls WT API every 100ms.
-2. **Data Processing**: `on_telemetry_data()` processes fetched data on main thread (non-blocking).
-3. **Map Sync**: Map bounds updated from `map_info.json` (fetched by background thread).
-4. **Physics**: `update_physics()` runs JDAM simulations at 10Hz on a separate timer.
-5. **Network TX**: `broadcast_packet()` sends position/airfields via UDP.
-6. **Network RX**: `update_network_data()` handles incoming packets.
-7. **Rendering**: `paintEvent()` draws overlay using cached data. `web_server.py` serves API to browser.
-8. **Audio**: `SoundManager` plays warnings via `QSoundEffect` (low-latency, event-loop driven).
+1. **Initialization**: `main.py` loads config, starts the tray icon, and instantiates `OverlayWindow`.
+2. **Telemetry Fetch**: `TelemetryFetcher` (background) polls WT API every 100ms.
+3. **Data Processing**: `OverlayWindow.on_telemetry_data()` processes data, updates simulations, and syncs to `SHARED_DATA`.
+4. **Map Sync**: Map bounds are updated dynamically on map change.
+5. **Physics**: `GbuHudMixin.update_physics()` runs bomb simulations at 10Hz.
+6. **Network TX**: `OverlayWindow` broadcasts position/airfields via UDP sockets.
+7. **Network RX**: `NetworkReceiver` pushes data back to `OverlayWindow.update_network_data()`.
+8. **Rendering**: `OverlayWindow.paintEvent()` delegates to mixin draw methods.
+9. **Web Sync**: Web server reads from `SHARED_DATA` to update the dashboard.
 
 ### Web Map Server (`web_server.py`)
 
@@ -93,13 +97,13 @@ The web map is a standalone Flask application that runs in a separate thread.
 - **Architecture**:
     - **Flask App**: Serves `dashboard.html` and static assets.
     - **API Endpoint**: `/api/data` returns the current game state as JSON.
-    - **Shared Data**: `main.py` updates a `shared_data` dictionary which the Flask server reads from in a background thread.
-- **Planning Mode**: Users can click to place waypoints. These are sent via POST to `/api/waypoints`, picked up by `main.py`, and rendered on the overlay.
+    - **Shared Data**: `overlay.py` updates the `SHARED_DATA` dictionary (in `web_server.py`) which the server reads from.
+- **Planning Mode**: Users can click to place waypoints. These are queued and processed by `overlay.py`.
 - **Compass Rose**: An SVG-based overlay in the browser that mimics the in-game compass, toggled via the toolbar.
  This ensures the web server never blocks the main overlay loop.
 
 - **Key Functions**:
-    - `update_shared_data(data)`: Called by `main.py` to push new telemetry.
+    - `update_shared_data(data)`: Called by `overlay.py` to push new telemetry.
     - `get_data()`: Route handler for `/api/data`.
 
 ### Web API Commands (`POST /api/command`)
@@ -111,7 +115,7 @@ The web client sends commands to the Python backend via JSON POST requests.
 | `planning_update` | N/A | Updates the list of waypoints drawn on the map. |
 | `set_formation` | `set_formation` | Toggles the formation status flag. |
 
-These commands are placed in a queue (`SHARED_DATA['commands']`) and processed by `main.py` in the main thread loop (`process_web_commands`).
+These commands are placed in a queue (`SHARED_DATA['commands']`) and processed by `overlay.py` in its primary interval loop (`process_web_commands`).
 
 ### Map Calibration (`auto_calibrate_new.py`)
 
@@ -208,7 +212,7 @@ Keep the release description basic. Specifically list **New Features** added in 
 
 ### Vehicle Name Translation
 Raw vehicle IDs (e.g., `f_16c_block_50`) are translated to human-readable names using `vehicles.json`.
-- `main.py` loads this JSON on startup.
+- `overlay.py` loads this JSON on startup.
 - If a translation isn't found, it falls back to the raw ID.
 
 ### State Management

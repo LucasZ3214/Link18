@@ -219,19 +219,25 @@ def auto_calibrate_map_v2(window=None):
         with open('config.json', 'w') as f:
             json.dump(config, f, indent=4)
             
-        # Update Runtime Globals
-        import sys
-        main_mod = sys.modules['__main__']
-        if hasattr(main_mod, 'MAP_OFFSET_X'):
-            main_mod.MAP_OFFSET_X = int(map_x)
-            main_mod.MAP_OFFSET_Y = int(map_y)
-            main_mod.MAP_WIDTH = int(map_w)
-            main_mod.MAP_HEIGHT = int(map_h)
-            
+        # Update Runtime Globals (New Architecture)
+        try:
+            import config
+            config.CONFIG['map_offset_x'] = int(map_x)
+            config.CONFIG['map_offset_y'] = int(map_y)
+            config.CONFIG['map_width'] = int(map_w)
+            config.CONFIG['map_height'] = int(map_h)
+            # Update module level constants for any new imports
+            config.MAP_OFFSET_X = int(map_x)
+            config.MAP_OFFSET_Y = int(map_y)
+            config.MAP_WIDTH = int(map_w)
+            config.MAP_HEIGHT = int(map_h)
+            print("[CALIBRATE] Updated config.CONFIG and config constants")
+        except Exception as e:
+            print(f"[CALIBRATE] Warning: Could not update config module: {e}")
+
         if window:
-            # window.map_min = None # Force re-sync of coords - DISABLED to prevent markers disappearing
             # Trigger a repaint/update
-            pass
+            window.update()
             
         return True
     else:

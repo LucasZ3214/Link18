@@ -7,10 +7,10 @@
     "disable_lan_broadcast": true,
     "enable_map_overlay": true,
     "enable_web_map": true,
-    "map_offset_x": 723,
-    "map_offset_y": 199,
-    "map_width": 818,
-    "map_height": 818,
+    "map_offset_x": 715,
+    "map_offset_y": 183,
+    "map_width": 834,
+    "map_height": 834,
     "timer_interval": 15,
     "unit_is_kts": true,
     "trail_duration": 180,
@@ -19,5 +19,6 @@
     "vws_normalize": true,
     "vws_volume": 0.15,
     "vws_interval": 1.0,
+    "show_gbu_timers": false,
     "debug_mode": false
 }

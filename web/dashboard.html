@@ -444,8 +444,10 @@
                 </button>
                 <!-- Clear Drawings -->
                 <button id="clearDrawingsBtn" class="toolbar-btn" onclick="clearDrawings()" title="Clear All Drawings">
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ff4444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <polyline points="3 6 5 6 21 6"></polyline>`r`n                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ff4444" stroke-width="2"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="3 6 5 6 21 6"></polyline>`r`n <path
+                            d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
                     </svg>
                 </button>
             </div>
@@ -460,7 +462,7 @@
         <button id="resetView" onclick="fitToScreen()" style="display: none; margin-right: 10px;">Reset View</button>
         <button onclick="toggleLegend()" style="margin-right: 10px;">Legend</button>
         <button onclick="toggleSettings()" style="margin-right: 10px;">Settings</button>
-        <button onclick="toggleFullscreen()">‚õ?Fullscreen</button>
+        <button onclick="toggleFullscreen()">‚õ∂ Fullscreen</button>
     </div>
 
     <!-- Speed Override Panel -->
@@ -489,7 +491,7 @@
                 <div class="keypad-btn" onclick="appendSpeedKey('3')">3</div>
                 <div class="keypad-btn" onclick="clearSpeedInput()" style="color: #ff8888;">C</div>
                 <div class="keypad-btn" onclick="appendSpeedKey('0')">0</div>
-                <div class="keypad-btn" onclick="backspaceSpeed()" style="color: #ffcc88;">‚Ü?/div>
+                <div class="keypad-btn" onclick="backspaceSpeed()" style="color: #ffcc88;">‚Üê</div>
             </div>
 
             <button class="keypad-btn" onclick="clearSpeedOverride()"
@@ -528,7 +530,8 @@
                 </label>
             </div>
         </div>
-        <div style="text-align: right;">
+        <div style="text-align: right; display: flex; justify-content: space-between; align-items: center;">
+            <span id="versionLabel" style="color: #666; font-size: 10px;">Link18 --</span>
             <button onclick="toggleSettings()">Close</button>
         </div>
     </div>
@@ -1052,6 +1055,12 @@
                 if (response.ok) {
                     lastData = await response.json();
                     failCount = 0; // Reset counter on success
+
+                    // Update version label if provided in config
+                    if (lastData.config && lastData.config.version) {
+                        const vLabel = document.getElementById('versionLabel');
+                        if (vLabel) vLabel.innerText = "Link18 " + lastData.config.version;
+                    }
 
                     // DEBUG: Log first update to see data structure
                     if (!window.debugLogged) {

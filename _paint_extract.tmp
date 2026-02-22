@@ -1,0 +1,1039 @@
+    def paintEvent(self, event):
+        # Poll web commands continuously (even if game is off)
+        # self.check_web_commands() # DEPRECATED: Handled by process_web_commands timer
+
+        # Always visible (Persistent Overlay)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        # --- TIMER DISPLAY (Top Right - Always Visible) ---
+        
+        # Calculate flight time
+        if self.spawn_time is not None:
+            self.flight_time = time.time() - self.spawn_time
+            
+        screen_width = self.width()
+        right_margin = 2  # Consistent margin for right-aligned elements
+        top_margin = 13  # Moved 1px down
+        line_height = 15
+        
+        # Calculate marker scale based on map resolution (baseline: 1920x1080)
+        self.marker_scale = min(MAP_WIDTH / self.baseline_width, MAP_HEIGHT / self.baseline_height)
+        
+        # Format time as T+HH:MM:SS (no milliseconds)
+        total_seconds = self.flight_time
+        hours = int(total_seconds // 3600)
+        minutes = int((total_seconds % 3600) // 60)
+        seconds = int(total_seconds % 60)
+        time_str = f"T+{hours:02d}:{minutes:02d}:{seconds:02d}"
+        
+        # Calculate time until next mark (T-)
+        interval = CONFIG.get('timer_interval', 15)
+        next_mark = ((minutes // interval) + 1) * interval
+        if next_mark >= 60:
+             # This logic handles within-hour looping. 
+             # If next_mark is 60 (e.g. at 45m with 15m interval), it targets top of hour.
+             next_mark = 0
+            
+        # Total seconds from top of hour to now
+        current_seconds_in_hour = minutes * 60 + seconds
+        target_seconds_in_hour = next_mark * 60
+        
+        # Handle wrap around (e.g. 58m -> 00m)
+        if target_seconds_in_hour <= current_seconds_in_hour:
+             target_seconds_in_hour += 3600
+             
+        time_to_next = target_seconds_in_hour - current_seconds_in_hour
+        
+        countdown_hours = int(time_to_next // 3600)
+        countdown_minutes = int((time_to_next % 3600) // 60)
+        countdown_seconds = int(time_to_next % 60)
+        countdown_str = f"T-{countdown_hours:02d}:{countdown_minutes:02d}:{countdown_seconds:02d}"
+        
+        # Calculate text width for right alignment (use monospace font for consistency)
+        font_timer = QFont('Courier New', 11, QFont.Weight.Bold)  # Size 9 to match Arial visual size
+        metrics_timer = QFontMetrics(font_timer)
+        
+        text_width_plus = metrics_timer.horizontalAdvance(time_str)
+        text_width_minus = metrics_timer.horizontalAdvance(countdown_str)
+        
+        # Use the wider of the two for consistent alignment
+        max_width = max(text_width_plus, text_width_minus)
+        
+        # Position both timers at the same right edge
+        timer_x = screen_width - max_width - right_margin
+        
+        # Draw T+ timer
+        painter.setPen(QPen(QColor(255, 255, 255), 2))
+        painter.setFont(font_timer)
+        painter.drawText(timer_x, top_margin + 1, time_str)  # Moved 1px down
+        
+        # Draw T- countdown below
+        painter.setPen(QPen(QColor(200, 200, 200), 2))
+        painter.setFont(font_timer)
+        painter.drawText(timer_x, top_margin + line_height + 1, countdown_str)  # Moved 1px down
+
+        # Mode Check: HUD vs Full Map
+        if not self.show_marker:
+            # HUD Mode: Only Compass Top Right
+            if getattr(self, 'show_compass', True) and '_local' in self.players:
+                p = self.players['_local']
+                dx = p.get('dx', 0)
+                dy = p.get('dy', 0)
+                heading_rad = 0
+                if abs(dx) > 0.001 or abs(dy) > 0.001:
+                    heading_rad = math.atan2(dy, dx)
+                
+                # Calculate others (Players & POIs)
+                others = []
+                
+                # Other Players
+                for pid, other_p in self.players.items():
+                    if pid == '_local': continue
+                    
+                    dx = other_p.get('x', 0) - p.get('x', 0)
+                    dy = other_p.get('y', 0) - p.get('y', 0)
+                    
+                    if abs(dx) > 0.0001 or abs(dy) > 0.0001:
+                        bearing = math.atan2(dy, dx)
+                        others.append({
+                            'type': 'player',
+                            'bearing': bearing,
+                            'color': other_p.get('color', QColor(255, 255, 255)),
+                            'label': '' # Can add callsign if needed, but might clutter
+                        })
+                        
+                # POIs (Local + Shared)
+                if hasattr(self, 'pois'):
+                    for poi in self.pois:
+                        p_dx = poi.get('x', 0) - p.get('x', 0)
+                        p_dy = poi.get('y', 0) - p.get('y', 0)
+                        
+                        if abs(p_dx) > 0.0001 or abs(p_dy) > 0.0001:
+                             p_bearing = math.atan2(p_dy, p_dx)
+                             others.append({
+                                 'type': 'poi',
+                                 'bearing': p_bearing,
+                                 # Use user's configured color for local POIs
+                                 'color': QColor(CONFIG.get('color', '#FFFF00')) 
+                             })
+                             
+                if hasattr(self, 'shared_pois'):
+                     for pid, poi in self.shared_pois.items():
+                        p_dx = poi.get('x', 0) - p.get('x', 0)
+                        p_dy = poi.get('y', 0) - p.get('y', 0)
+                        
+                        if abs(p_dx) > 0.0001 or abs(p_dy) > 0.0001:
+                             p_bearing = math.atan2(p_dy, p_dx)
+                             # Use player_color to identify owner, fall back to generic color
+                             # User asked for "there colour" -> Owner Color
+                             use_color = poi.get('player_color', poi.get('color', Qt.GlobalColor.yellow))
+                             others.append({
+                                 'type': 'poi',
+                                 'bearing': p_bearing,
+                                 'color': use_color
+                             })
+
+                # Top Right Position (Width - 133 - Margin)
+                # Radius 102.5 (Diameter - 5px). Center Y = 150 (Up 50px).
+                rx = self.width() - 133
+                ry = 150
+                
+                # Pass local player data for relative rendering (Planning paths)
+                self.draw_compass_rose(painter, rx, ry, 102.5, heading_rad, others, local_player=p)
+                
+                # --- HEADING & TARGET TEXT ---
+                heading_deg = math.degrees(heading_rad) % 360
+                
+                # Determine Target
+                target_bearing = None
+                target_dist = None
+                
+                if self.planning_waypoints:
+                    # Target is the first waypoint
+                    wp = self.planning_waypoints[0]
+                    # Calc bearing
+                    # Need map dimensions to convert normalized coords to meters for angle calc?
+                    # Actually angle is same in normalized if aspect ratio is 1:1.
+                    # BUT map might not be 1:1. 
+                    # Use pixel diff or normalized diff. Assuming 1:1 aspect for angle is okay if map is square.
+                    # War Thunder maps are usually square.
+                    
+                    dx_t = wp['x'] - p.get('x', 0)
+                    dy_t = wp['y'] - p.get('y', 0)
+                    
+                    if abs(dx_t) > 0.0001 or abs(dy_t) > 0.0001:
+                       target_bearing = math.degrees(math.atan2(dy_t, dx_t)) % 360
+                       
+                       # Calc Distance (approx in km, assuming 65km map size)
+                       # Better to use actual map size if known, but for HUD text approx is fine?
+                       # We have self.map_bounds.
+                       map_size_m = float(CONFIG.get('map_size_meters', 65000))
+                       if hasattr(self, 'map_bounds') and self.map_bounds:
+                            map_min = self.map_bounds.get('map_min', [0, 0])
+                            map_max = self.map_bounds.get('map_max', [map_size_m, map_size_m])
+                            map_size_m = max(map_max[0] - map_min[0], map_max[1] - map_min[1])
+                            
+                       dist_norm = math.hypot(dx_t, dy_t)
+                       target_dist = (dist_norm * map_size_m) / 1000.0 # km
+
+                # Draw Text
+                painter.setFont(QFont("Arial", 9, QFont.Weight.Bold))
+                metrics = QFontMetrics(painter.font())
+                
+                text_y = ry + 125 # Below Compass
+                
+                # Heading (REMOVED as per user request)
+                # hdg_str = f"HDG: {int(heading_deg):03d}"
+                # painter.setPen(QPen(Qt.GlobalColor.white))
+                # painter.drawText(rx - 40, text_y, hdg_str)
+                
+                # Target
+                if target_bearing is not None:
+                    tgt_str = f"TGT: {int(target_bearing):03d}"
+                    painter.setPen(QPen(Qt.GlobalColor.cyan)) # Cyan for Target
+                    painter.drawText(rx - 40, text_y + 15, tgt_str)
+                    
+                    # Delta (Turn indicator)
+                    diff = (target_bearing - heading_deg + 180) % 360 - 180
+                    # Arrow? or just L/R
+                    direction = "R" if diff > 0 else "L"
+                    if abs(diff) < 2: direction = ""
+                    delta_str = f"{direction} {abs(int(diff))}"
+                    
+                    dist_str = f"{target_dist:.1f}km"
+                    
+                    painter.drawText(rx + 35, text_y + 15, dist_str)
+                
+                # Draw Formation Panel below Compass (if enabled)
+                if getattr(self, 'show_formation_mode', False):
+                    # Position with fixed 20px margin from right edge
+                    # Table width = 340px + padding, center = width/2 = ~178
+                    table_center_x = self.width() - 20 - 178
+                    self.draw_formation_panel(painter, table_center_x, ry + 120, others)
+
+            # Removed return to allow JDAM overlay to draw
+            # return
+
+        # --- Full Map Mode ---
+
+        # Draw status & debug text (Top Left - Tighter to corner)
+        painter.setPen(QPen(Qt.GlobalColor.green if self.status_text.startswith("8111: OK") else Qt.GlobalColor.red))
+        painter.setFont(QFont("Arial", 10, QFont.Weight.Bold))
+        painter.drawText(2, 13, self.status_text)  # Moved 1px down
+        
+        # Draw calibration status if present
+        if self.calibration_status:
+            status_color = Qt.GlobalColor.yellow if "Calibrating" in self.calibration_status else (
+                Qt.GlobalColor.green if "OK" in self.calibration_status else Qt.GlobalColor.red
+            )
+            painter.setPen(QPen(status_color))
+            painter.drawText(2, 26, f"{self.calibration_status}")
+
+
+
+        # Draw Player List (exclude local player) - only when M is pressed
+        if self.show_marker:
+            list_y = 55 # Below timers
+            
+            # Header
+            header_text = "Active Aircraft:"
+            font_header = QFont('Arial', 10, QFont.Weight.Bold)
+            metrics_header = QFontMetrics(font_header)
+            header_width = metrics_header.horizontalAdvance(header_text)
+            
+            # Use consistent right margin
+            header_x = screen_width - header_width - right_margin
+            
+            painter.setPen(QPen(QColor(255, 255, 255), 2))
+            painter.setFont(font_header)
+            painter.drawText(header_x, list_y, header_text)
+            
+            # Players
+            y_offset = 20
+            font_player = QFont('Arial', 9)
+            metrics_player = QFontMetrics(font_player)
+            
+            # Sort: Local first, then others
+            sorted_pids = sorted(self.players.keys(), key=lambda x: 0 if x == '_local' else 1)
+            
+            for pid in sorted_pids:
+                p = self.players[pid]
+                callsign = p.get('callsign', pid)
+                if pid == '_local':
+                    callsign = f"{callsign} (You)"
+                    
+                color = p.get('color', Qt.GlobalColor.white)
+                
+                # Calculate alignment using consistent margin
+                text_width = metrics_player.horizontalAdvance(callsign)
+                text_x = screen_width - text_width - right_margin
+                indicator_x = text_x - 15
+                
+                # Draw color indicator
+                painter.setBrush(QBrush(color))
+                painter.setPen(QPen(color, 2))
+                painter.drawEllipse(indicator_x, list_y + y_offset - 8, 8, 8)
+                
+                # Draw Name
+                painter.setPen(QPen(QColor(255, 255, 255), 2))
+                painter.setFont(font_player)
+                painter.drawText(text_x, list_y + y_offset, callsign)
+                
+                y_offset += 20
+
+        # (Chat rendering moved to bottom of paintEvent)
+        if self.show_marker and self.map_min and self.overlay_enabled:
+            
+            # Iterate over all players (Draw Local FIRST so Remote appears on top)
+            # print(f"DEBUG: Painting Players: {list(self.players.keys())}") # Uncomment to trace paint list
+
+            # --- Draw Airfields ---
+            if self.airfields:
+                 for af in self.airfields:
+                      ax = MAP_OFFSET_X + (af['x'] * MAP_WIDTH)
+                      ay = MAP_OFFSET_Y + (af['y'] * MAP_HEIGHT)
+                      
+                      painter.save()
+                      painter.translate(ax, ay)
+                      painter.rotate(af['angle'])
+                      
+                      # Calculate dynamic width
+                      # Use stored length if available, else fixed fallback
+                      rect_w = 30 * self.marker_scale # Default
+                      if 'len' in af and af['len'] > 0:
+                          # Scale length by 1.0x (true to game scale)
+                          rect_w = (af['len'] * MAP_WIDTH) * 1.0
+                          # Ensure minimum visibility (15px scaled)
+                          rect_w = max(rect_w, 15 * self.marker_scale)
+                          
+                      rect_h = 6 * self.marker_scale
+                      
+                      # Draw Runway
+                      painter.setPen(QPen(Qt.GlobalColor.black, 1))
+                      color = af.get('color', Qt.GlobalColor.white)
+                      painter.setBrush(QBrush(color))
+                      
+                      # Centered rectangle
+                      painter.drawRect(QRectF(-rect_w/2, -rect_h/2, rect_w, rect_h))
+                      
+                      painter.restore()
+                      
+                      # Label drawn in main airfield loop (line ~1960)
+            
+            # Sort: Local (0) first, then others (1)
+            sorted_pids = sorted(self.players.keys(), key=lambda x: 0 if x == '_local' else 1)
+            
+            for pid in sorted_pids:
+                player = self.players[pid]
+                
+                # --- Compass Rose section removed (HUD Only) ---
+
+                # --- Draw Contrail ---
+                if 'trail' in player and len(player['trail']) > 1:
+                    trail_points = []
+                    for pt in player['trail']:
+                        if pt.get('x') is None or pt.get('y') is None:
+                            continue
+                        tx = MAP_OFFSET_X + (pt['x'] * MAP_WIDTH)
+                        ty = MAP_OFFSET_Y + (pt['y'] * MAP_HEIGHT)
+                        trail_points.append(QPointF(tx, ty))
+                    
+                    # Robust Trimming: Remove points within exclusion radius of current position
+                    # to prevent trail being visible inside the hollow marker.
+                    if len(trail_points) >= 2:
+                        head_pt = QPointF(MAP_OFFSET_X + (player['x'] * MAP_WIDTH), 
+                                          MAP_OFFSET_Y + (player['y'] * MAP_HEIGHT))
+                        exclusion_radius = 8 * self.marker_scale
+                        
+                        trimmed_points = []
+                        cut_index = -1
+                        # Iterate backwards to find first point outside radius
+                        for i in range(len(trail_points)-1, -1, -1):
+                            pt = trail_points[i]
+                            dx = pt.x() - head_pt.x()
+                            dy = pt.y() - head_pt.y()
+                            dist = math.hypot(dx, dy)
+                            if dist > exclusion_radius:
+                                cut_index = i
+                                # Found first point outside. 
+                                # Interpolate a start point exactly at radius edge for smoothness
+                                v_x = pt.x() - head_pt.x()
+                                v_y = pt.y() - head_pt.y()
+                                factor = exclusion_radius / dist
+                                start_x = head_pt.x() + v_x * factor
+                                start_y = head_pt.y() + v_y * factor
+                                
+                                # Take all points up to i, and append the start point
+                                trimmed_points = trail_points[:i+1]
+                                trimmed_points.append(QPointF(start_x, start_y))
+                                break
+                        
+                        if cut_index != -1:
+                            trail_points = trimmed_points
+                        else:
+                            # All points inside radius
+                            trail_points = []
+
+                    if len(trail_points) > 1:
+                        # Draw trail with some transparency (alpha 150)
+                        trail_color = QColor(player['color'])
+                        trail_color.setAlpha(150)
+                        painter.setPen(QPen(trail_color, 2)) # 2px width
+                        painter.drawPolyline(trail_points)
+                
+                raw_x, raw_y = player['x'], player['y']
+                
+                # Bounds Check: Hide players outside the map [0.0, 1.0]
+                # Also handles the 0,0 glitch for out-of-bounds players
+                if not (0.0 <= raw_x <= 1.0 and 0.0 <= raw_y <= 1.0):
+                    continue
+                
+                # Check for exact 0.0, 0.0 which often means invalid data
+                if abs(raw_x) < 0.001 and abs(raw_y) < 0.001:
+                    continue
+                
+                # SIMPLIFIED MAPPING LOGIC
+                x = MAP_OFFSET_X + (raw_x * MAP_WIDTH)
+                y = MAP_OFFSET_Y + (raw_y * MAP_HEIGHT)
+                
+                # --- Draw Arrow ---
+                painter.save()
+                painter.translate(x, y)
+                
+                # Orientation
+                rotation = 0.0
+                dx, dy = player['dx'], player['dy']
+                if abs(dx) > 0.001 or abs(dy) > 0.001:
+                    rotation = math.degrees(math.atan2(dy, dx))
+                
+                painter.rotate(rotation)
+
+                color = player.get('color', QColor(0, 0, 255, 200))
+                painter.setPen(QPen(color, 2))
+                painter.setBrush(QBrush(color))
+                
+                # Draw Callsign Text
+                painter.setPen(QPen(Qt.GlobalColor.white))
+                painter.setFont(QFont("Arial", 8))
+                # Rotate text back to be upright? No, let it rotate with plane usually looks cooler/standard in sims
+                # Actually, usually text stays upright. But let's keep it simple first.
+                # To make text upright, we'd need to rotate inverse. 
+                painter.save()
+                painter.rotate(-rotation) # Counter-rotate for upright text
+                painter.drawText(-20, -15, player.get('callsign', 'Unknown'))
+                painter.restore()
+                
+                # Reset Pen for Arrow
+                painter.setPen(QPen(color, 2))
+
+                # Arrow Shape (Pointing Right) - scaled by resolution
+                scale = self.marker_scale
+                arrow_polygon = QPolygonF([
+                    QPointF(14 * scale, 0),   # Tip
+                    QPointF(-5 * scale, -7 * scale), # Back Left
+                    QPointF(-5 * scale, 7 * scale)   # Back Right
+                ])
+                
+                # Draw colored arrow outline on top (hollow)
+                painter.setPen(QPen(color, 2))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawPolygon(arrow_polygon)
+                
+                # Draw Speed Vector Line
+                spd = player.get('spd', 0)
+                if spd > 10:  # Only draw if moving
+                    # Length factor: e.g. 20px for 1000 km/h -> factor 0.02
+                    vector_len = spd * 0.03 * scale
+                    painter.drawLine(QPointF(14 * scale, 0), QPointF(14 * scale + vector_len, 0))
+                
+                # Draw Altitude and Speed Text (below arrow)
+                painter.save()
+                painter.rotate(-rotation)  # Counter-rotate for upright text
+                
+                alt_m = player.get('alt', 0)
+                alt_km = alt_m / 1000.0  # Convert meters to kilometers
+                
+                spd_kmh = player.get('spd', 0)
+                
+                # Check speed unit from config (boolean, default True for kts)
+                is_kts = CONFIG.get('unit_is_kts', True)
+                if is_kts:
+                    spd_display = spd_kmh * 0.539957
+                else:
+                    spd_display = spd_kmh
+                
+                # Format: "900 4.5" (Speed Alt) - Speed first as requested
+                stats_text = f"{int(spd_display)} {alt_km:.1f}"
+                
+                painter.setPen(QPen(Qt.GlobalColor.white))
+                font_stats = QFont("Arial", 8)
+                painter.setFont(font_stats)
+                
+                # Center text
+                metrics = QFontMetrics(font_stats)
+                text_width = metrics.horizontalAdvance(stats_text)
+                painter.drawText(-text_width // 2, 30, stats_text)
+                
+                painter.restore()
+                
+                painter.restore()
+
+            # --- Draw Airfields (Unified Local + Shared) ---
+            if self.airfields:
+                for idx, airfield in enumerate(self.airfields):
+                    # Skip invalid coordinates
+                    raw_x, raw_y = airfield['x'], airfield['y']
+                    if raw_x is None or raw_y is None: continue
+                    
+                    # Filter ghost airfields near 0,0 (phantom data)
+                    if abs(raw_x) < 0.01 and abs(raw_y) < 0.01:
+                        continue
+
+                    # Map to screen coordinates
+                    x = MAP_OFFSET_X + (raw_x * MAP_WIDTH)
+                    y = MAP_OFFSET_Y + (raw_y * MAP_HEIGHT)
+                    
+                    painter.save()
+                    painter.translate(x, y)
+                    angle = airfield.get('angle', 0)
+                    painter.rotate(angle)
+                    
+                    # Determine Color (Orange for Shared/Blue for Local? Or just use object color)
+                    # Shared airfields are appended with Orange color in update_telemetry
+                    c = airfield.get('color', QColor(100, 100, 255))
+                    
+                    # Calculate scaled runway length
+                    runway_len = 20 * self.marker_scale  # Default
+                    if airfield.get('len') and airfield['len'] > 0.001:
+                        # Scale based on normalized length
+                        runway_len = (airfield['len'] * MAP_WIDTH) * 0.5
+                        runway_len = max(runway_len, 10 * self.marker_scale)  # Minimum visibility
+                    
+                    # Draw Runway Line (scaled length)
+                    painter.setPen(QPen(c, 6))
+                    painter.drawLine(int(-runway_len/2), 0, int(runway_len/2), 0)
+                    
+                    # --- Draw 12km Radius Circle for Long Runways (>3000m) ---
+                    # Calculate runway length in meters (approx)
+                    # Assume map_size is approximately 65km (typical WT map)
+                    map_size_m = float(CONFIG.get('map_size_meters', 65000))
+                    runway_meters = (airfield.get('len', 0) * map_size_m)
+                    
+                    if runway_meters > 3000:
+                        # 12km radius in pixels
+                        radius_normalized = 12000 / map_size_m
+                        radius_pixels = radius_normalized * MAP_WIDTH
+                        
+                        # Draw circle (counter-rotate to undo runway angle)
+                        painter.rotate(-angle)
+                        circle_pen = QPen(c, 4, Qt.PenStyle.DashLine)
+                        circle_pen.setColor(QColor(c.red(), c.green(), c.blue(), 100))  # Semi-transparent
+                        painter.setPen(circle_pen)
+                        painter.setBrush(Qt.BrushStyle.NoBrush)
+                        painter.drawEllipse(int(-radius_pixels), int(-radius_pixels), 
+                                            int(radius_pixels * 2), int(radius_pixels * 2))
+                        painter.rotate(angle)  # Re-rotate for label
+                    
+                    # Draw Label (AF1, AF2, etc)
+                    # Use 'id' if available, else index
+                    af_label = f"AF{airfield.get('id', idx+1)}"
+                    if airfield.get('is_cv'):
+                        af_label = f"CV{airfield.get('id', idx+1)}"
+                        
+                    painter.setPen(QPen(Qt.GlobalColor.white))
+                    # Counter-rotate text to keep it upright vs screen
+                    painter.rotate(-angle) 
+                    
+                    # Simple Text Label (No Outline)
+                    painter.setPen(QPen(Qt.GlobalColor.white))
+                    painter.setFont(QFont("Arial", 8, QFont.Weight.Bold))
+                    painter.drawText(-15, -20, af_label)
+                    
+                    painter.restore()
+
+                # Only print once per map view
+                # if self.show_debug and not hasattr(self, '_af_render_log'):
+                #      print(f"[RENDER] Drew {len(self.airfields)} airfields")
+                #      self._af_render_log = True
+                
+                
+                # Draw Debug Map Boundary
+                if self.show_debug:
+                    painter.setPen(QPen(Qt.GlobalColor.green, 2))
+                    painter.setBrush(Qt.BrushStyle.NoBrush)
+                    painter.drawRect(int(MAP_OFFSET_X), int(MAP_OFFSET_Y), int(MAP_WIDTH), int(MAP_HEIGHT))
+                    
+                    # Draw Debug Text info
+                    painter.setPen(QPen(Qt.GlobalColor.green))
+                    painter.setFont(QFont("Arial", 10))
+                    
+                    trail_info = ""
+                    if '_local' in self.players:
+                        t_len = len(self.players['_local'].get('trail', []))
+                        trail_info = f" | Trail: {t_len}"
+                        
+                    painter.drawText(int(MAP_OFFSET_X), int(MAP_OFFSET_Y) - 5, 
+                                   f"Map: {MAP_WIDTH}x{MAP_HEIGHT} ({MAP_OFFSET_X},{MAP_OFFSET_Y}){trail_info}")
+
+            # --- Draw Scale Bar (Bottom Right of Map) ---
+            # Use actual map dimensions if available, otherwise config default
+            map_size_m = float(CONFIG.get('map_size_meters', 65000))
+            
+            # Check if we have map_info with actual bounds
+            if hasattr(self, 'map_bounds') and self.map_bounds:
+                map_min = self.map_bounds.get('map_min', [0, 0])
+                map_max = self.map_bounds.get('map_max', [map_size_m, map_size_m])
+                map_size_m = max(map_max[0] - map_min[0], map_max[1] - map_min[1])
+            
+            # Calculate grid cell size (map typically divided into 8 squares)
+            grid_cells = 8
+            grid_cell_m = map_size_m / grid_cells
+            grid_cell_km = grid_cell_m / 1000
+            
+            # --- Scale Bar (Ruler Style) ---
+            
+            # Flush RIGHT against Map Edge
+            map_right_edge = MAP_OFFSET_X + MAP_WIDTH
+            
+            # Determine Bar Max Range (target 10km if possible)
+            max_km = 10
+            if map_size_m < 12000: max_km = 5
+            if map_size_m < 6000: max_km = 2
+            
+            # Calculate pixel ratio
+            pixels_per_km = MAP_WIDTH / (map_size_m / 1000)
+            
+            # Calculate Bar Width
+            bar_width = round(max_km * pixels_per_km)
+            bar_x = int(map_right_edge - bar_width)
+            bar_y = int(MAP_OFFSET_Y + MAP_HEIGHT - 35) # Ruler position
+            
+            # Draw Base Line (Outline)
+            painter.setPen(QPen(Qt.GlobalColor.black, 4))
+            painter.drawLine(bar_x, bar_y, bar_x + bar_width, bar_y)
+            # Draw Base Line (White)
+            painter.setPen(QPen(Qt.GlobalColor.white, 2))
+            painter.drawLine(bar_x, bar_y, bar_x + bar_width, bar_y)
+            
+            # Draw Ticks and Labels (Right to Left)
+            # 0 is at map_right_edge (bar_x + bar_width)
+            
+            tick_marks = [0, 1, 5, 10]
+            if max_km < 10: tick_marks = [0, 1, 2, 5] if max_km >= 5 else [0, 0.5, 1, 2]
+            
+            painter.setFont(QFont("Arial", 7, QFont.Weight.Bold))
+            fm = QFontMetrics(painter.font())
+            
+            # --- KM Scale ---
+            for km in tick_marks:
+                if km > max_km: continue
+                
+                px_offset = round(km * pixels_per_km)
+                tick_x = (bar_x + bar_width) - px_offset
+                
+                # Draw Tick (No Outline, Above Line)
+                painter.setPen(QPen(Qt.GlobalColor.black, 2)) # Use Black or White? Usually White on Black map?
+                # User said "do not use individual outline".
+                # The Bar is White with Black Outline.
+                # If I draw White tick, it matches.
+                # If background is light, it vanishes.
+                # If background is dark (map), White is good.
+                # I'll use White (thickness 2).
+                painter.setPen(QPen(Qt.GlobalColor.white, 2))
+                painter.drawLine(tick_x, bar_y, tick_x, bar_y - 6) # Upwards (Above line)
+                
+                # Draw Label (Number only)
+                is_whole = isinstance(km, int) or (isinstance(km, float) and km.is_integer())
+                label = f"{int(km)}" if is_whole else f"{km}"
+                if km == 0: label = "0"
+                
+                tw = fm.horizontalAdvance(label)
+                # Double draw text
+                painter.setPen(QPen(Qt.GlobalColor.black))
+                painter.drawText(int(tick_x - tw/2 + 1), int(bar_y - 8), label) # Above tick
+                painter.setPen(QPen(Qt.GlobalColor.white))
+                painter.drawText(int(tick_x - tw/2), int(bar_y - 9), label)
+
+            # "km" Label at the Right
+            label = "km"
+            tw = fm.horizontalAdvance(label)
+            label_x = int(bar_x + bar_width + 8) 
+            painter.setPen(QPen(Qt.GlobalColor.black))
+            painter.drawText(label_x + 1, int(bar_y - 8), label)
+            painter.setPen(QPen(Qt.GlobalColor.white))
+            painter.drawText(label_x, int(bar_y - 9), label)
+
+            # --- Nautical Miles (NM) Scale ---
+            # ruler at ~25px below KM
+            nm_bar_y = bar_y + 25 
+            
+            # Extend to 10 NM fixed?
+            # 10 NM = 18.52 km.
+            # Convert 10 NM to pixels.
+            px_10nm = round(10 * 1.852 * pixels_per_km)
+            
+            # NM Bar starts at "0" (Same Right point as KM) and extends Left.
+            # Right point: bar_x + bar_width
+            # Left point: (bar_x + bar_width) - px_10nm
+            nm_bar_x_start = (bar_x + bar_width) - px_10nm
+            
+            # Draw Base Line (NM) - Outline + White
+            painter.setPen(QPen(Qt.GlobalColor.black, 4))
+            painter.drawLine(nm_bar_x_start, nm_bar_y, bar_x + bar_width, nm_bar_y)
+            painter.setPen(QPen(Qt.GlobalColor.white, 2))
+            painter.drawLine(nm_bar_x_start, nm_bar_y, bar_x + bar_width, nm_bar_y)
+            
+            # NM Ticks: 0, 1, 2, 5, 10
+            nm_ticks = [0, 1, 2, 5, 10]
+            
+            for nm in nm_ticks:
+                # Always draw up to 10? Yes.
+                px_offset = round(nm * 1.852 * pixels_per_km)
+                tick_x = (bar_x + bar_width) - px_offset
+                
+                # Draw Tick (Upwards? Above line)
+                painter.setPen(QPen(Qt.GlobalColor.white, 2))
+                painter.drawLine(tick_x, nm_bar_y, tick_x, nm_bar_y - 6) 
+                
+                # Label (Above ticks)
+                label = f"{int(nm)}"
+                tw = fm.horizontalAdvance(label)
+                
+                painter.setPen(QPen(Qt.GlobalColor.black))
+                painter.drawText(int(tick_x - tw/2 + 1), int(nm_bar_y - 8), label) # Moved Up
+                painter.setPen(QPen(Qt.GlobalColor.white))
+                painter.drawText(int(tick_x - tw/2), int(nm_bar_y - 9), label)
+
+            # "NM" Label at Right (Above line)
+            label = "NM"
+            painter.setPen(QPen(Qt.GlobalColor.black))
+            painter.drawText(label_x + 1, int(nm_bar_y - 8), label) # Moved Up
+            painter.setPen(QPen(Qt.GlobalColor.white))
+            painter.drawText(label_x, int(nm_bar_y - 9), label)
+
+            # --- Special "1 Grid" Label (Above everything) ---
+            grid_km = (map_size_m / 8) / 1000
+            
+            # Map Size Label (Below NM scale line)
+            # Move further down to be clearly "outside" the map image
+            
+            map_label_y = nm_bar_y + 35 
+            
+            # Grid Size Label (Above Map Size)
+            grid_label_y = map_label_y - 12
+            
+            # Draw Grid Size - Flush Right
+            grid_nm = grid_km * 0.539957
+            label = f"{grid_km:.2f} km = {grid_nm:.2f} NM"
+            tw = fm.horizontalAdvance(label)
+            
+            painter.setFont(QFont("Arial", 7, QFont.Weight.Bold)) 
+            
+            painter.setPen(QPen(Qt.GlobalColor.black))
+            painter.drawText(int(bar_x + bar_width - tw + 1), int(grid_label_y + 1), label)
+            painter.setPen(QPen(Qt.GlobalColor.white))
+            painter.drawText(int(bar_x + bar_width - tw), int(grid_label_y), label)
+            
+            # Draw "Map: ..." 
+            map_km = map_size_m / 1000
+            map_nm = map_km * 0.539957
+            label = f"Map: {int(map_km)}km/{int(map_nm)}NM"
+            tw = fm.horizontalAdvance(label)
+            painter.setPen(QPen(Qt.GlobalColor.black))
+            painter.drawText(int(bar_x + bar_width - tw + 1), int(map_label_y + 1), label)
+            painter.setPen(QPen(Qt.GlobalColor.white))
+            painter.drawText(int(bar_x + bar_width - tw), int(map_label_y), label)
+
+            # --- Draw SPAA Radius Circles (4.5km) ---
+            if hasattr(self, 'map_ground_units') and self.map_ground_units:
+                # Cluster SPAA units
+                spaa_clusters = []
+                cluster_threshold = 0.05  # Normalized distance threshold
+                
+                for unit in self.map_ground_units:
+                    icon = (unit.get('icon') or '').lower()
+                    # Check if unit is SPAA
+                    if 'aa' in icon or 'spaa' in icon or 'sam' in icon:
+                        unit_x, unit_y = unit.get('x', 0), unit.get('y', 0)
+                        added = False
+                        
+                        # Try to add to existing cluster
+                        for cluster in spaa_clusters:
+                            dist = ((unit_x - cluster['x'])**2 + (unit_y - cluster['y'])**2)**0.5
+                            if dist < cluster_threshold:
+                                # Update cluster centroid
+                                n = cluster['count']
+                                cluster['x'] = (cluster['x'] * n + unit_x) / (n + 1)
+                                cluster['y'] = (cluster['y'] * n + unit_y) / (n + 1)
+                                cluster['count'] += 1
+                                added = True
+                                break
+                        
+                        if not added:
+                            spaa_clusters.append({
+                                'x': unit_x,
+                                'y': unit_y,
+                                'count': 1,
+                                'color': unit.get('color', '#FF0000')
+                            })
+                
+                # Draw 4.5km radius circle for each SPAA cluster
+                for cluster in spaa_clusters:
+                    # Skip if cluster is near an airfield (airfields already have 12km circle)
+                    is_near_airfield = False
+                    if hasattr(self, 'airfields') and self.airfields:
+                        for af in self.airfields:
+                            af_x, af_y = af.get('x', 0), af.get('y', 0)
+                            dist = ((cluster['x'] - af_x)**2 + (cluster['y'] - af_y)**2)**0.5
+                            if dist < 0.08:  # About 5km in normalized coords
+                                is_near_airfield = True
+                                break
+                    
+                    if is_near_airfield:
+                        continue
+                    
+                    cx = MAP_OFFSET_X + (cluster['x'] * MAP_WIDTH)
+                    cy = MAP_OFFSET_Y + (cluster['y'] * MAP_HEIGHT)
+                    
+                    # 4.5km radius in pixels
+                    radius_normalized = 4500 / map_size_m
+                    radius_pixels = radius_normalized * MAP_WIDTH
+                    
+                    # Determine color based on unit color (friendly vs hostile)
+                    color_str = str(cluster.get('color', '#FF0000'))
+                    is_friendly = '#043' in color_str or '#174D' in color_str or '4,63,255' in color_str
+                    circle_color = QColor(126, 226, 255, 150) if is_friendly else QColor(255, 126, 126, 150)
+                    
+                    # Draw dashed circle
+                    painter.save()
+                    painter.translate(cx, cy)
+                    pen = QPen(circle_color, 3, Qt.PenStyle.DashLine)
+                    painter.setPen(pen)
+                    painter.setBrush(Qt.BrushStyle.NoBrush)
+                    painter.drawEllipse(int(-radius_pixels), int(-radius_pixels),
+                                        int(radius_pixels * 2), int(radius_pixels * 2))
+                    painter.restore()
+
+            # --- Draw Local POIs ---
+            if self.pois:
+                for poi in self.pois:
+                    raw_x, raw_y = poi['x'], poi['y']
+                    x = MAP_OFFSET_X + (raw_x * MAP_WIDTH)
+                    y = MAP_OFFSET_Y + (raw_y * MAP_HEIGHT)
+                    
+                    painter.save()
+                    painter.translate(x, y)
+                    
+                    # Use our own config color
+                    my_color = QColor(CONFIG.get('color', '#FFCC11'))
+                    painter.setPen(QPen(my_color, 2))
+                    painter.setBrush(Qt.BrushStyle.NoBrush)
+                    
+                    radius = 15
+                    arc_angle = 60
+                    # Draw reticle
+                    painter.drawArc(-radius, -radius, radius*2, radius*2, -30 * 16, arc_angle * 16)
+                    painter.drawArc(-radius, -radius, radius*2, radius*2, 60 * 16, arc_angle * 16)
+                    painter.drawArc(-radius, -radius, radius*2, radius*2, 150 * 16, arc_angle * 16)
+                    painter.drawArc(-radius, -radius, radius*2, radius*2, 240 * 16, arc_angle * 16)
+                    
+                    # Label
+                    painter.setPen(QPen(Qt.GlobalColor.white))
+                    painter.setFont(QFont("Arial", 8, QFont.Weight.Bold))
+                    painter.drawText(-15, -20, CONFIG.get('callsign', 'Me'))
+                    painter.restore()
+
+            # --- Draw Shared POIs ---
+            if self.shared_pois:
+                # Cleanup expired POIs (older than 20s or owner offline)
+                current_time = time.time()
+                expired_pids = []
+
+                # Identify Expired
+                for pid, poi in list(self.shared_pois.items()):
+                    # Check direct timeout
+                    if current_time - poi.get('last_seen', 0) > 20:
+                        expired_pids.append(pid)
+                        continue
+                    
+                    # Check owner connectivity
+                    player = self.players.get(pid)
+                    if not player or (current_time - player.get('last_seen', 0) > 30):
+                        expired_pids.append(pid)
+
+                # Delete Expired
+                for pid in expired_pids:
+                    if pid in self.shared_pois:
+                        del self.shared_pois[pid]
+                    
+                for pid, poi in self.shared_pois.items():
+                    raw_x, raw_y = poi['x'], poi['y']
+                    
+                    # Map to screen coordinates
+                    x = MAP_OFFSET_X + (raw_x * MAP_WIDTH)
+                    y = MAP_OFFSET_Y + (raw_y * MAP_HEIGHT)
+                    
+                    painter.save()
+                    painter.translate(x, y)
+                    
+                    # Use player's color for the POI marker
+                    poi_color = poi.get('player_color', QColor(255, 255, 255))
+                    
+                    painter.setPen(QPen(poi_color, 2))  # 2px border thickness
+                    painter.setBrush(Qt.BrushStyle.NoBrush)  # Hollow
+                    
+                    # Draw four corner arcs (targeting reticle style)
+                    radius = 15  # Radius of the circle
+                    arc_angle = 60  # Degrees for each arc (60 degrees = 1/6 of circle)
+                    
+                    # Qt uses 1/16th degree units, and 0 degrees is at 3 o'clock position
+                    # Top-right corner (starts at -30 degrees from 3 o'clock)
+                    painter.drawArc(-radius, -radius, radius*2, radius*2, -30 * 16, arc_angle * 16)
+                    
+                    # Bottom-right corner (starts at 60 degrees from 3 o'clock)
+                    painter.drawArc(-radius, -radius, radius*2, radius*2, 60 * 16, arc_angle * 16)
+                    
+                    # Bottom-left corner (starts at 150 degrees from 3 o'clock)
+                    painter.drawArc(-radius, -radius, radius*2, radius*2, 150 * 16, arc_angle * 16)
+                    
+                    # Top-left corner (starts at 240 degrees from 3 o'clock)
+                    painter.drawArc(-radius, -radius, radius*2, radius*2, 240 * 16, arc_angle * 16)
+                    
+                    # Draw label with player's callsign
+                    callsign = poi.get('callsign', 'Unknown')
+                    label_text = f"{callsign}"
+                    painter.setPen(QPen(Qt.GlobalColor.white))
+                    painter.setFont(QFont("Arial", 8, QFont.Weight.Bold))
+                    painter.drawText(-30, -20, label_text)
+                    
+                    painter.restore()
+
+
+        # --- DEBUG OVERLAY ---
+        if DEBUG_MODE and self.show_marker:
+            # Draw red box around map area
+            painter.setPen(QPen(QColor(255, 0, 0), 2))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRect(
+                int(MAP_OFFSET_X), 
+                int(MAP_OFFSET_Y), 
+                int(MAP_WIDTH), 
+                int(MAP_HEIGHT)
+            )
+            
+            # Removed center crosshair as requested
+
+        # --- DRAW JDAM OVERLAY (Always on top, unconditional) ---
+        self.draw_tti(painter)
+        
+        # if self.bomb_tracker.get_active_bombs():
+        #      self.draw_graph(painter)
+
+        # --- SAM / AAA THREAT WARNING (Unconditional) ---
+        threat_type = None # None, "SAM", "AAA"
+        
+        if hasattr(self, 'map_ground_units') and '_local' in self.players:
+            local_p = self.players['_local']
+            local_x, local_y = local_p['x'], local_p['y']
+            
+            # Calculate Meters per Unit
+            map_size_m = float(CONFIG.get('map_size_meters', 65000))
+            if self.map_max and self.map_min:
+                width_m = self.map_max[0] - self.map_min[0]
+                height_m = self.map_max[1] - self.map_min[1]
+                map_size_m = max(width_m, height_m)
+            
+            # Check 1: Enemy Airfield (SAM - 12km)
+            # 12km in normalized coords
+            sam_radius_norm = 12000 / map_size_m
+            if self.airfields:
+                for af in self.airfields:
+                     # Check if enemy?
+                     # Robust Color Check (QColor object to Hex String)
+                     raw_color = af.get('color')
+                     if isinstance(raw_color, QColor):
+                         color_str = raw_color.name() # Returns #RRGGBB
+                     else:
+                         color_str = str(raw_color)
+
+                     # Expanded Friendly Check (Blue variations + original specific codes)
+                     is_friendly = (
+                         '#043' in color_str or 
+                         '#174D' in color_str or 
+                         '4,63,255' in color_str or
+                         color_str.lower().startswith('#00') or
+                         color_str.lower().startswith('#4c') or
+                         color_str.lower().startswith('#55')
+                     )
+                     
+                     # Hardcode Blue channel check if QColor?
+                     if isinstance(raw_color, QColor):
+                         if raw_color.blue() > 150 and raw_color.red() < 100:
+                             is_friendly = True
+                     
+                     if not is_friendly:
+                         dist = math.hypot(af['x'] - local_x, af['y'] - local_y)
+                         if dist < sam_radius_norm:
+                             threat_type = "SAM"
+                             break
+            
+            
+            # Check 2: Enemy SPAA (AAA - 4.5km) - Overrides SAM if present (Imminent Threat)
+            # 4.5km in normalized coords
+            aaa_radius_norm = 4500 / map_size_m
+            
+            if self.map_ground_units:
+                for unit in self.map_ground_units:
+                    icon = (unit.get('icon') or '').lower()
+                    if 'aa' in icon or 'spaa' in icon or 'sam' in icon:
+                             # Check Color (Enemy Only)
+                             color_str = str(unit.get('color', '#FF0000'))
+                             is_friendly = '#043' in color_str or '#174D' in color_str or '4,63,255' in color_str
+                             
+                             u_x, u_y = unit.get('x', 0), unit.get('y', 0)
+                             dist = math.hypot(u_x - local_x, u_y - local_y)
+                             
+                             if not is_friendly:
+                                 if dist < aaa_radius_norm:
+                                     threat_type = "AAA"
+                                     break
+        
+        if threat_type:
+            # Play VWS warning
+            if hasattr(self, 'vws'):
+                self.vws.play_warning(threat_type)
+
+            # Flash effect (Sync with VWS Interval)
+            # Default to 1Hz if VWS not present
+            interval = 1.0
+            if hasattr(self, 'vws'):
+                interval = self.vws.interval
+            
+            # 50% Duty Cycle
+            if (time.time() % interval) < (interval / 2):
+                font_size = 28
+                painter.setFont(QFont("Arial", font_size, QFont.Weight.Bold))
+                
+                warn_text = threat_type # "SAM" or "AAA"
+                fm = QFontMetrics(painter.font())
+                tw = fm.horizontalAdvance(warn_text)
+                th = fm.height()
+                
+                # Bottom Left Position
+                # 100px from Left, 200px from Bottom
+                x = 100
+                y = self.height() - 200
+                
+                # Draw Background Box
+                padding = 10
+                box_rect = QRectF(x - padding, y - th + (padding/2), tw + (padding*2), th + padding)
+                
+                painter.setBrush(QBrush(QColor(0, 0, 0, 180))) # Semi-transparent Black
+                painter.setPen(QPen(QColor(255, 0, 0), 2)) # Red Border
+                painter.drawRoundedRect(box_rect, 5, 5)
+                
+                # Draw Text
+                painter.setPen(QPen(QColor(255, 0, 0))) # Red Text
+                painter.drawText(x, y, warn_text)
+

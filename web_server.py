@@ -216,6 +216,10 @@ def run_server(shared_data_ref, port=8000):
             if not (self.path == '/api/data' or self.path.startswith('/proxy/map.img')):
                 self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
                 self.send_header('Pragma', 'no-cache')
+                
+                # Explicitly set UTF-8 for HTML files to prevent encoding errors
+                if self.path.endswith('.html') or self.path == '/' or self.path == '':
+                    self.send_header('Content-Type', 'text/html; charset=utf-8')
             super().end_headers()
 
         def do_POST(self):
@@ -231,7 +235,7 @@ def run_server(shared_data_ref, port=8000):
     try:
         # Use ThreadingTCPServer to handle concurrent requests (e.g. Map Proxy + API)
         # preventing the server from locking up if one request behaves slowly.
-        httpd = socketserver.ThreadingTCPServer(("", port), Handler)
+        httpd = socketserver.ThreadingTCPServer(("0.0.0.0", port), Handler)
         httpd.timeout = 10  # Prevent hung connections
         
         # Get all local IPs

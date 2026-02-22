@@ -3,6 +3,7 @@ import os
 import shutil
 import json
 import subprocess
+from config import VERSION_TAG
 
 def build_executable():
     print("Building Executable with PyInstaller...")
@@ -36,7 +37,7 @@ def build_executable():
         return False
 
 def create_release():
-    release_name = "Link18_v1.6.1.zip"
+    release_name = f"Link18_{VERSION_TAG}.zip"
     
     # 0. Build
     if not build_executable():

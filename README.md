@@ -106,9 +106,9 @@ Click the **Settings** button (bottom right) to:
     "disable_lan_broadcast": false,
     "web_marker_scale": 2.3,
     "enable_vws": true,
-    "vws_volume": 0.5,
     "vws_interval": 5,
     "vws_normalize": false,
+    "show_gbu_timers": false,
     "debug_mode": false
 }
 ```
@@ -131,6 +131,7 @@ Click the **Settings** button (bottom right) to:
 | `vws_volume` | float | Warning volume (0.0 - 1.0) |
 | `vws_interval` | float | Minimum seconds between repeated warnings |
 | `vws_normalize` | bool | Normalize audio loudness on load |
+| `show_gbu_timers`| bool | `true` = Show GBU HUD on startup, `false` = Hidden |
 
 ---
 
