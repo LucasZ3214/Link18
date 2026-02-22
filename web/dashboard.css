@@ -1,0 +1,296 @@
+﻿body {
+            margin: 0;
+            padding: 0;
+            background-color: #1e1e1e;
+            overflow: hidden;
+            font-family: Arial, sans-serif;
+        }
+
+        #mapCanvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+            touch-action: none;
+            /* Prevent touch zoom artifacts */
+        }
+
+        #status {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: #00FF00;
+            font-weight: bold;
+            text-shadow: 1px 1px 0 #000;
+            pointer-events: none;
+            z-index: 1000;
+        }
+
+        #topToolbar {
+            position: absolute;
+            top: 40px;
+            left: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            pointer-events: auto;
+            /* Enable clicks */
+            z-index: 1000;
+        }
+
+        .toolbar-btn {
+            background: rgba(0, 0, 0, 0.6);
+            color: #ccc;
+            border: 1px solid #666;
+            width: 40px;
+            height: 40px;
+            padding: 0;
+            font-size: 20px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            cursor: pointer;
+            border-radius: 8px;
+            transition: all 0.2s;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+        }
+
+        .toolbar-btn:hover {
+            background: rgba(50, 50, 50, 0.8);
+            color: #fff;
+        }
+
+        .toolbar-btn.active {
+            background: rgba(0, 100, 0, 0.6);
+            border-color: #00FF00;
+            color: #fff;
+        }
+
+        #timer {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            color: #fff;
+            font-family: monospace;
+            font-size: 20px;
+            text-align: right;
+            pointer-events: none;
+            text-shadow: 1px 1px 0 #000;
+        }
+
+        #controls {
+            position: absolute;
+            bottom: 10px;
+            right: 10px;
+        }
+
+        button {
+            background: rgba(51, 51, 51, 0.7);
+            color: #fff;
+            border: 1px solid #555;
+            padding: 8px 15px;
+            font-size: 14px;
+            cursor: pointer;
+            border-radius: 4px;
+            backdrop-filter: blur(4px);
+            transition: background 0.2s;
+        }
+
+        #playerList {
+            position: absolute;
+            top: 55px;
+            /* Below top-right timer */
+            right: 10px;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 6px;
+            padding: 8px 12px;
+            background: rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(5px);
+            border-radius: 10px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: white;
+            font-size: 13px;
+            pointer-events: none;
+            z-index: 100;
+        }
+
+        /* Formation Mode Styles for Player List */
+        #playerList.formation-mode {
+            background: rgba(0, 0, 0, 0.85);
+            /* Darker background for readability */
+            align-items: stretch;
+            /* Full width */
+            border: 1px solid #444;
+        }
+
+        #playerList.formation-mode .player-item {
+            display: grid;
+            grid-template-columns: 90px 80px 60px 50px 60px 50px;
+            /* Callsign, Type, Dist, Hdg, Alt, Spd */
+            gap: 10px;
+            font-family: 'Consolas', monospace;
+            font-size: 14px;
+            border-bottom: 1px solid #333;
+            padding-bottom: 4px;
+            margin-bottom: 4px;
+        }
+
+        #playerList.formation-mode .player-header {
+            display: grid;
+            grid-template-columns: 90px 80px 60px 50px 60px 50px;
+            gap: 10px;
+            font-weight: bold;
+            color: #aaa;
+            border-bottom: 1px solid #666;
+            margin-bottom: 6px;
+            font-size: 13px;
+        }
+
+        .pid-cell {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            font-weight: bold;
+        }
+
+        .data-cell {
+            text-align: right;
+        }
+
+        .data-cell.alt {
+            color: #88ccff;
+        }
+
+        .data-cell.spd {
+            color: #ffcc88;
+        }
+
+        #convoyInfoPanel {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            /* Allow it to sit under status or to the side? Let's verify */
+            /* Actually user said "toggleable menu". Let's put it on the left side, below status? */
+            top: 60px;
+            left: 60px;
+            /* Offset to not overlap vertical toolbar */
+            max-width: 300px;
+            max-height: 400px;
+            overflow-y: auto;
+            background: rgba(0, 0, 0, 0.8);
+            border: 1px solid #444;
+            border-radius: 8px;
+            padding: 10px;
+            color: #eee;
+            font-size: 12px;
+            display: none;
+            /* Hidden by default */
+            z-index: 900;
+            backdrop-filter: blur(5px);
+            pointer-events: auto;
+        }
+
+        .convoy-item {
+            margin-bottom: 8px;
+            border-bottom: 1px solid #333;
+            padding-bottom: 4px;
+        }
+
+        .convoy-header {
+            font-weight: bold;
+            color: #fff;
+        }
+
+        .convoy-detail {
+            color: #aaa;
+            margin-left: 8px;
+        }
+
+        .player-item {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            white-space: nowrap;
+        }
+
+        .player-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+        }
+
+        button:hover {
+            background: rgba(80, 80, 80, 0.9);
+        }
+
+        #speedPanel {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            width: 220px;
+            background: rgba(0, 0, 0, 0.85);
+            border: 1px solid #555;
+            border-radius: 8px;
+            color: white;
+            z-index: 1000;
+            display: none;
+            backdrop-filter: blur(5px);
+            font-family: Arial, sans-serif;
+        }
+
+        #speedPanelHeader {
+            padding: 10px;
+            background: rgba(50, 50, 50, 0.8);
+            border-top-left-radius: 8px;
+            border-top-right-radius: 8px;
+            cursor: move;
+            font-weight: bold;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        #speedPanelContent {
+            padding: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .keypad-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 5px;
+        }
+
+        .keypad-btn {
+            background: #333;
+            border: 1px solid #555;
+            color: white;
+            padding: 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            text-align: center;
+        }
+
+        .keypad-btn:active {
+            background: #555;
+        }
+
+        .speed-input-row {
+            display: flex;
+            gap: 5px;
+        }
+
+        #speedInput {
+            flex: 1;
+            background: #222;
+            border: 1px solid #444;
+            color: #fff;
+            padding: 5px;
+            font-size: 16px;
+            text-align: right;
+            border-radius: 4px;
+        }
