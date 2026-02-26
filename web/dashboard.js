@@ -238,16 +238,31 @@ const convoyBtn = document.getElementById('convoyInfoBtn');
 
 function toggleConvoyInfo() {
     showConvoyInfo = !showConvoyInfo;
-    // No localStorage persistence requested, but consistent UI checks:
+    convoyPanel.style.display = showConvoyInfo ? 'block' : 'none';
+    convoyBtn.style.background = showConvoyInfo ? '#005500' : '';
+    draw();
+
+    // Auto-dismiss after 15s
     if (showConvoyInfo) {
-        convoyPanel.style.display = 'block';
-        convoyBtn.classList.add('active');
-    } else {
-        convoyPanel.style.display = 'none';
-        convoyBtn.classList.remove('active');
+        clearTimeout(window.convoyInfoTimer);
+        window.convoyInfoTimer = setTimeout(() => {
+            showConvoyInfo = false;
+            convoyPanel.style.display = 'none';
+            convoyBtn.style.background = '';
+            draw();
+        }, 15000);
     }
 }
 
+// EW (Electronic Warfare) Mode State
+let showEWMode = false;
+
+function toggleEWMode() {
+    showEWMode = !showEWMode;
+    const ewBtn = document.getElementById('ewBtn');
+    if (ewBtn) ewBtn.style.background = showEWMode ? '#553300' : '';
+    draw();
+}
 // Legend State
 let showLegend = true;
 let legendTimer = setTimeout(() => { showLegend = false; draw(); }, 45000); // Auto-hide after 45s
@@ -753,6 +768,7 @@ let isPlacingFighter = false;
 let isPlacingPoi = false;
 let currentStroke = null;
 let draggingMarkerId = null;
+let draggingWaypointIndex = null;
 
 function toggleCommanderMode() {
     isCommanderMode = !isCommanderMode;
@@ -888,7 +904,7 @@ canvas.addEventListener('pointerdown', e => {
             // Map Screen -> World
             const [wx, wy] = Transformer.screenToWorld(sx, sy);
 
-            if (Number.isFinite(wx)) {
+            if (Number.isFinite(wx) && pointers.size === 0) {
                 // Find my player unit's color
                 let playerColor = '#FFFF00'; // Default yellow
                 if (lastData && lastData.players) {
@@ -930,6 +946,34 @@ canvas.addEventListener('pointerdown', e => {
         }
     }
 
+    // Check Waypoint Drag (Planning Mode)
+    if (isPlanningMode && planningWaypoints.length > 0) {
+        const rect = canvas.getBoundingClientRect();
+        const sx = e.clientX - rect.left;
+        const sy = e.clientY - rect.top;
+        const tapDistSq = 600; // 24px hit radius
+
+        for (let i = planningWaypoints.length - 1; i >= 0; i--) {
+            const wp = planningWaypoints[i];
+
+            // Reconstruct the mapping from Normalized (0-1) to Screen
+            const refW = REFERENCE_MAP_SIZE;
+            const refH = REFERENCE_MAP_SIZE;
+            const msx = viewOffsetX + wp.x * refW * viewScale;
+            const msy = viewOffsetY + wp.y * refH * viewScale;
+
+            const dx = sx - msx;
+            const dy = sy - msy;
+
+            if (dx * dx + dy * dy < tapDistSq) {
+                draggingWaypointIndex = i;
+                if (canvas.setPointerCapture) canvas.setPointerCapture(e.pointerId);
+                e.preventDefault();
+                return;
+            }
+        }
+    }
+
     // Normal Pan/Zoom
     pointers.set(e.pointerId, e);
     pointerStart.set(e.pointerId, { x: e.clientX, y: e.clientY, time: Date.now() });
@@ -949,7 +993,22 @@ canvas.addEventListener('pointerdown', e => {
 
 canvas.addEventListener('pointermove', e => {
 
+    if (draggingWaypointIndex !== null && isPlanningMode) {
+        const rect = canvas.getBoundingClientRect();
+        const sx = e.clientX - rect.left;
+        const sy = e.clientY - rect.top;
 
+        const refW = REFERENCE_MAP_SIZE;
+        const refH = REFERENCE_MAP_SIZE;
+        const nx = (sx - viewOffsetX) / (refW * viewScale);
+        const ny = (sy - viewOffsetY) / (refH * viewScale);
+
+        planningWaypoints[draggingWaypointIndex].x = nx;
+        planningWaypoints[draggingWaypointIndex].y = ny;
+        draw();
+        e.preventDefault();
+        return;
+    }
 
     if (isCommanderMode && draggingMarkerId) {
         const rect = canvas.getBoundingClientRect();
@@ -969,9 +1028,14 @@ canvas.addEventListener('pointermove', e => {
     }
 
     if (isCommanderMode && isPenActive && currentStroke) {
-        if (e.buttons === 0) {
-            // Mouse up outside?
-            finishStroke();
+        if (e.buttons === 0 || pointers.size > 1) {
+            // Mouse up outside or user started a multi-touch zoom? Abort stroke.
+            if (pointers.size > 1) {
+                // If zooming, we don't even want to save the weird glitched stroke
+                currentStroke = null;
+            } else {
+                finishStroke();
+            }
             return;
         }
 
@@ -1074,6 +1138,16 @@ function handlePointerUp(e) {
         }
         draggingMarkerId = null;
         pointers.delete(e.pointerId);
+        return;
+    }
+
+    if (draggingWaypointIndex !== null) {
+        draggingWaypointIndex = null;
+        try {
+            canvas.releasePointerCapture(e.pointerId);
+        } catch (err) { /* ignore */ }
+        pointers.delete(e.pointerId);
+        sendWaypoints();
         return;
     }
 
@@ -3000,6 +3074,122 @@ function draw() {
             }
 
             ctx.restore();
+        });
+    }
+
+    // ═══════════════════════════════════════════════
+    // RWR THREATS (Always rendered when data exists)
+    // ═══════════════════════════════════════════════
+    if (lastData.rwr_threats && lastData.rwr_threats.length > 0) {
+        const wW = (typeof worldWidth !== 'undefined' && worldWidth > 0) ? worldWidth : 65000;
+
+        lastData.rwr_threats.forEach(threat => {
+            const [sx, sy] = worldToScreen(threat.x, threat.y);
+            const isTriangulated = threat.is_triangulated === true;
+            const threatSize = 14 * markerScale;
+
+            ctx.save();
+            ctx.translate(sx, sy);
+
+            // Draw threat diamond (regular/square diamond - 45° rotated square)
+            ctx.beginPath();
+            ctx.moveTo(0, -threatSize);
+            ctx.lineTo(threatSize, 0);
+            ctx.lineTo(0, threatSize);
+            ctx.lineTo(-threatSize, 0);
+            ctx.closePath();
+
+            if (isTriangulated) {
+                // Triangulated: Red diamond with crosshair
+                ctx.fillStyle = 'rgba(255, 30, 30, 0.85)';
+                ctx.fill();
+                ctx.strokeStyle = '#FF0000';
+                ctx.lineWidth = 2 * markerScale;
+                ctx.stroke();
+
+
+            } else {
+                // Single-source: Orange diamond
+                ctx.fillStyle = 'rgba(255, 102, 0, 0.7)';
+                ctx.fill();
+                ctx.strokeStyle = '#FF3300';
+                ctx.lineWidth = 2 * markerScale;
+                ctx.stroke();
+            }
+
+
+            // Label text (show OCR-recognized label)
+            const label = threat.label || 'UNK';
+            ctx.fillStyle = '#FFFFFF';
+            ctx.strokeStyle = '#000000';
+            ctx.lineWidth = 3 * markerScale;
+            ctx.font = `bold ${11 * markerScale}px Arial`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.strokeText(label, 0, 0);
+            ctx.fillText(label, 0, 0);
+
+            // Distance & Confidence text
+            if (threat.dist_m) {
+                const distKm = (threat.dist_m / 1000).toFixed(1);
+                let infoStr = `${distKm}km`;
+                if (isTriangulated && threat.triangulation_confidence !== undefined) {
+                    const confPct = Math.round(threat.triangulation_confidence * 100);
+                    infoStr += ` [${confPct}%]`;
+                }
+
+                ctx.font = `${10 * markerScale}px Arial`;
+                ctx.fillStyle = isTriangulated ? '#FF5555' : '#FFAA00';
+                ctx.textBaseline = 'top';
+                ctx.strokeText(infoStr, 0, threatSize + 2 * markerScale);
+                ctx.fillText(infoStr, 0, threatSize + 2 * markerScale);
+            }
+
+            ctx.restore();
+
+            // Draw bearing line from reporting player to threat
+            if (threat.player_x !== undefined && threat.player_y !== undefined) {
+                const [psx, psy] = worldToScreen(threat.player_x, threat.player_y);
+                ctx.save();
+                ctx.setLineDash([6, 4]);
+                ctx.strokeStyle = 'rgba(255, 102, 0, 0.4)';
+                ctx.lineWidth = 1.5 * markerScale;
+                ctx.beginPath();
+                ctx.moveTo(psx, psy);
+                ctx.lineTo(sx, sy);
+                ctx.stroke();
+                ctx.setLineDash([]);
+                ctx.restore();
+            }
+
+            // ── EW MODE: Bearing Sector Fan ──
+            if (showEWMode) {
+                // Bearing sector fan (±5° uncertainty wedge from reporting player)
+                if (threat.bearing_abs !== undefined && threat.player_x !== undefined) {
+                    ctx.save();
+                    const [psx2, psy2] = worldToScreen(threat.player_x, threat.player_y);
+                    ctx.translate(psx2, psy2);
+
+                    const bearingRad = (threat.bearing_abs - 90) * Math.PI / 180;
+                    const fanHalf = 5 * Math.PI / 180; // ±5°
+                    // Fan extends from player to threat and slightly beyond
+                    const dx = sx - psx2;
+                    const dy = sy - psy2;
+                    const fanLen = Math.sqrt(dx * dx + dy * dy) * 1.3;
+
+                    ctx.beginPath();
+                    ctx.moveTo(0, 0);
+                    ctx.arc(0, 0, fanLen, bearingRad - fanHalf, bearingRad + fanHalf);
+                    ctx.closePath();
+                    ctx.fillStyle = 'rgba(255, 140, 0, 0.12)';
+                    ctx.fill();
+                    ctx.strokeStyle = 'rgba(255, 140, 0, 0.4)';
+                    ctx.lineWidth = 1 * markerScale;
+                    ctx.stroke();
+
+                    ctx.restore();
+                }
+            }
         });
     }
 

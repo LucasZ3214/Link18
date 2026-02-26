@@ -1,0 +1,108 @@
+{
+    "sensors": {
+        "jp_j_asq_2": {
+            "name": "J/ASQ-2",
+            "sensorUnits": [
+                "F-2A ADTW",
+                "F-2A"
+            ],
+            "receivers": [
+                {
+                    "azimuth": 0.0,
+                    "elevation": 0.0,
+                    "azimuthWidth": 180.0,
+                    "elevationWidth": 90.0,
+                    "angleFinder": true,
+                    "indicate": true
+                },
+                {
+                    "azimuth": -180.0,
+                    "elevation": 0.0,
+                    "azimuthWidth": 180.0,
+                    "elevationWidth": 90.0,
+                    "angleFinder": true,
+                    "indicate": true
+                }
+            ],
+            "bands": {
+                "band0": false,
+                "band1": false,
+                "band2": true,
+                "band3": true,
+                "band4": true,
+                "band5": true,
+                "band6": true,
+                "band7": true,
+                "band8": true,
+                "band9": true,
+                "band10": true,
+                "band11": false,
+                "band12": false
+            },
+            "targetRange": {
+                "min": 9250.0,
+                "max": 74000.0
+            },
+            "baselineRange": 90000.0,
+            "friendFoeId": true,
+            "targetRangeFinder": true,
+            "detectTracking": true,
+            "detectLaunch": false,
+            "trackedTargetsMax": 12,
+            "signalHoldTime": 5.0,
+            "targetHoldTime": 5.0,
+            "newTargetHoldTime": 3.0
+        }
+    },
+    "threat_labels": {
+        "AAA": {
+            "max_range_m": 4500,
+            "type": "AAA",
+            "description": "Anti-Aircraft Artillery"
+        },
+        "S1": {
+            "max_range_m": 32000,
+            "type": "SAM",
+            "description": "SA-Series SAM"
+        },
+        "R1": {
+            "max_range_m": 85000,
+            "type": "SAM",
+            "description": "Search Radar"
+        },
+        "2S6": {
+            "max_range_m": 10000,
+            "type": "SPAA",
+            "description": "Tunguska SPAAG"
+        },
+        "SA": {
+            "max_range_m": 12000,
+            "type": "SAM",
+            "description": "Generic SAM"
+        },
+        "AI": {
+            "max_range_m": 80000,
+            "type": "AIR",
+            "description": "Airborne Intercept Radar"
+        },
+        "P": {
+            "max_range_m": 74000,
+            "type": "SAM",
+            "description": "Pantsir-type"
+        },
+        "11": {
+            "max_range_m": 25000,
+            "type": "SAM",
+            "description": "SA-11 Buk"
+        },
+        "UNK": {
+            "max_range_m": 74000,
+            "type": "UNK",
+            "description": "Unknown Emitter"
+        }
+    },
+    "_meta": {
+        "rwr_display_max_range_m": 90000,
+        "description": "RWR display maps threats from center to outer ring. Outer ring = sensor baseline range (90km). This file can be extended with additional sensors and threat labels."
+    }
+}

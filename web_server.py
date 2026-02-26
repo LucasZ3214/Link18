@@ -100,6 +100,7 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                     'respawn_timers': SHARED_DATA.get('respawn_timers', []),
                     'server_time': time.time(),
                     'commander': SHARED_DATA.get('commander', {}),
+                    'rwr_threats': SHARED_DATA.get('rwr_threats', []),
                     'config': {
                         'unit_is_kts': CONFIG.get('unit_is_kts', True),  # Speed unit setting
                         'web_marker_scale': CONFIG.get('web_marker_scale', 2.3)  # Manual scaling factor

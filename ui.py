@@ -90,6 +90,15 @@ class SettingsDialog(QDialog):
         grp.setLayout(g)
         layout.addWidget(grp)
 
+        # --- RWR Detection ---
+        grp = QGroupBox("RWR Detection")
+        g = QFormLayout()
+        self.add_bool(g, "enable_rwr", "Enable RWR Scraping")
+        self.add_text(g, "rwr_bbox", "RWR Bbox [x,y,w,h]", placeholder="30,340,200,200")
+        self.add_float(g, "rwr_scan_hz", "Scan Rate (Hz)", 0.5, 10.0, 1)
+        grp.setLayout(g)
+        layout.addWidget(grp)
+
         # --- Advanced ---
         grp = QGroupBox("Advanced")
         g = QFormLayout()

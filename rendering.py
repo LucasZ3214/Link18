@@ -551,7 +551,7 @@ class RenderingMixin:
                     dx_t = wp['x'] - p.get('x', 0)
                     dy_t = wp['y'] - p.get('y', 0)
                     if abs(dx_t) > 0.0001 or abs(dy_t) > 0.0001:
-                        target_bearing = math.degrees(math.atan2(dy_t, dx_t)) % 360
+                        target_bearing = (math.degrees(math.atan2(dy_t, dx_t)) + 90) % 360
                         map_size_m = float(CONFIG.get('map_size_meters', 65000))
                         if hasattr(self, 'map_bounds') and self.map_bounds:
                             map_min = self.map_bounds.get('map_min', [0, 0])
@@ -569,11 +569,18 @@ class RenderingMixin:
                     painter.setPen(QPen(Qt.GlobalColor.cyan))
                     painter.drawText(rx - 40, text_y + 15, tgt_str)
 
-                    diff = (target_bearing - heading_deg + 180) % 360 - 180
+                    true_hdg = (heading_deg + 90) % 360
+                    diff = (target_bearing - true_hdg + 180) % 360 - 180
                     direction = "R" if diff > 0 else "L"
                     if abs(diff) < 2:
                         direction = ""
-                    delta_str = f"{direction} {abs(int(diff))}"
+                        delta_str = ""
+                    else:
+                        delta_str = f"{direction} {abs(int(diff))}"
+
+                    if delta_str:
+                        delta_w = metrics.horizontalAdvance(delta_str)
+                        painter.drawText(int(rx - delta_w / 2), text_y + 30, delta_str)
 
                     dist_str = f"{target_dist:.1f}km"
                     painter.drawText(rx + 35, text_y + 15, dist_str)

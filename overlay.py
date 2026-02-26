@@ -47,6 +47,17 @@ try:
 except ImportError:
     def auto_calibrate_map_v2(window): return False
 
+try:
+    from rwr_extractor import scan_rwr, RWR_AVAILABLE
+except ImportError:
+    RWR_AVAILABLE = False
+
+try:
+    from triangulation import triangulate, match_bearings
+except ImportError:
+    pass
+    def scan_rwr(*args, **kwargs): return []
+
 
 def print_startup_banner():
     """Display the Link18 welcome banner and config info."""
@@ -130,6 +141,27 @@ class OverlayWindow(RenderingMixin, GbuHudMixin, QWidget):
         self.phys_timer = QTimer(self)
         self.phys_timer.timeout.connect(self.update_physics)
         self.phys_timer.start(100)
+
+        # --- RWR Detection ---
+        # --- RWR Detection ---
+        self.rwr_threats = []
+        self.remote_rwr_bearings = {}  # {sender: {'x', 'y', 'bearings': [...]}}
+        self.rwr_enabled = CONFIG.get('enable_rwr', False)
+        self.rwr_bbox = CONFIG.get('rwr_bbox', [30, 340, 200, 200])
+        self.current_roll = 0.0
+        self.current_heading = 0.0
+        self.player_x = None
+        self.player_y = None
+
+        if self.rwr_enabled and RWR_AVAILABLE:
+            rwr_hz = CONFIG.get('rwr_scan_hz', 2)
+            rwr_interval = max(100, int(1000 / rwr_hz))
+            self.rwr_timer = QTimer(self)
+            self.rwr_timer.timeout.connect(self._rwr_scan_tick)
+            self.rwr_timer.start(rwr_interval)
+            print(f"[RWR] Enabled at {rwr_hz}Hz (interval={rwr_interval}ms)")
+        elif self.rwr_enabled:
+            print("[RWR] Enabled in config but dependencies missing")
 
         # Persistence for Airfield Altitude
         self.known_airfields = self.load_airfields()
@@ -354,8 +386,54 @@ class OverlayWindow(RenderingMixin, GbuHudMixin, QWidget):
                 print(f"[POI RX] Total POIs stored: {len(self.shared_pois)}")
             return
 
+        # Commander Mode packets
+        if packet.get('type') == 'cmd_drawing_add':
+            d_data = packet.get('data', {})
+            if d_data.get('id'):
+                existing_ids = [d.get('id') for d in self.shared_data['commander']['drawings']]
+                if d_data['id'] not in existing_ids:
+                    self.shared_data['commander']['drawings'].append(d_data)
+                    self.update()
+            return
+
+        if packet.get('type') == 'cmd_drawing_clear':
+            self.shared_data['commander']['drawings'] = []
+            self.shared_data['commander']['markers'] = []
+            self.update()
+            return
+
+        if packet.get('type') == 'cmd_marker_add':
+            m_data = packet.get('data', {})
+            if m_data.get('id'):
+                existing_ids = [m.get('id') for m in self.shared_data['commander']['markers']]
+                if m_data['id'] not in existing_ids:
+                    self.shared_data['commander']['markers'].append(m_data)
+                    self.update()
+            return
+
+        if packet.get('type') == 'cmd_marker_update':
+            m_data = packet.get('data', {})
+            if m_data and 'id' in m_data:
+                for idx, m in enumerate(self.shared_data['commander']['markers']):
+                    if m['id'] == m_data['id']:
+                        self.shared_data['commander']['markers'][idx] = m_data
+                        self.update()
+                        break
+            return
+
         # Team chat packet
         if packet.get('type') == 'team_chat':
+            return
+
+        # RWR Bearings packet
+        if packet.get('type') == 'rwr_bearings':
+            sender = packet.get('sender', packet.get('callsign', pid))
+            self.remote_rwr_bearings[sender] = {
+                'x': x,
+                'y': y,
+                'bearings': packet.get('bearings', []),
+                'last_seen': time.time()
+            }
             return
 
         # Player position packet
@@ -429,10 +507,21 @@ class OverlayWindow(RenderingMixin, GbuHudMixin, QWidget):
                     d_data = cmd.get('data', {})
                     if d_data.get('id'):
                         self.shared_data['commander']['drawings'].append(d_data)
+                        self.broadcast_packet({
+                            'id': f"draw_{d_data['id']}",
+                            'type': 'cmd_drawing_add',
+                            'sender': CONFIG.get('callsign', 'Pilot'),
+                            'data': d_data
+                        })
 
                 elif cmd_type == 'cmd_drawing_clear':
                     self.shared_data['commander']['drawings'] = []
                     self.shared_data['commander']['markers'] = []
+                    self.broadcast_packet({
+                        'id': f"clear_{int(time.time()*1000)}",
+                        'type': 'cmd_drawing_clear',
+                        'sender': CONFIG.get('callsign', 'Pilot')
+                    })
 
                 elif cmd_type == 'place_marker':
                     m_type = cmd.get('marker_type')
@@ -440,14 +529,21 @@ class OverlayWindow(RenderingMixin, GbuHudMixin, QWidget):
                     y = cmd.get('y')
                     if m_type and x is not None and y is not None:
                         new_id = f"{m_type}_{int(time.time()*1000)}"
-                        self.shared_data['commander']['markers'].append({
+                        m_data = {
                             'id': new_id,
                             'type': m_type,
                             'x': x,
                             'y': y,
                             'callsign': cmd.get('callsign', 'Fighter')
-                        })
+                        }
+                        self.shared_data['commander']['markers'].append(m_data)
                         print(f"[CMD] Placed {m_type} marker at {x:.3f}, {y:.3f}")
+                        self.broadcast_packet({
+                            'id': f"marker_{new_id}",
+                            'type': 'cmd_marker_add',
+                            'sender': CONFIG.get('callsign', 'Pilot'),
+                            'data': m_data
+                        })
 
                 elif cmd_type == 'cmd_marker_update':
                     m_data = cmd.get('data')
@@ -456,6 +552,13 @@ class OverlayWindow(RenderingMixin, GbuHudMixin, QWidget):
                             if m['id'] == m_data['id']:
                                 self.shared_data['commander']['markers'][idx] = m_data
                                 break
+                        self.broadcast_packet({
+                            'id': f"upd_{m_data['id']}",
+                            'type': 'cmd_marker_update',
+                            'sender': CONFIG.get('callsign', 'Pilot'),
+                            'data': m_data
+                        })
+
 
                 elif cmd_type == 'set_formation':
                     val = cmd.get('value', False)
@@ -667,6 +770,12 @@ class OverlayWindow(RenderingMixin, GbuHudMixin, QWidget):
         try:
             data = fetched.get('map_data')
             if data is None:
+                if hasattr(self, 'shared_data'):
+                    self.shared_data['config'] = {
+                        'callsign': CONFIG.get('callsign', 'Pilot'),
+                        'color': CONFIG.get('color', '#FF0000'),
+                        'version': VERSION_TAG
+                    }
                 return
 
             was_disconnected = self.status_text.startswith("Init") or "Error" in self.status_text or "Searching" in self.status_text
@@ -718,6 +827,7 @@ class OverlayWindow(RenderingMixin, GbuHudMixin, QWidget):
             if ind_data:
                 v_type = ind_data.get('type', '')
                 self.current_pitch = ind_data.get('aviahorizon_pitch', 0.0)
+                self.current_roll = ind_data.get('aviahorizon_roll', 0.0)
                 if v_type:
                     real_name = self.vehicle_map.get(v_type)
                     if not real_name:
@@ -764,15 +874,21 @@ class OverlayWindow(RenderingMixin, GbuHudMixin, QWidget):
                 self.shared_data['players'] = self.players.copy()
 
                 if hasattr(self, 'player_x') and self.player_x is not None:
+                    local_p = self.players.get('_local', {})
+                    existing_trail = local_p.get('trail', [])
                     self.shared_data['players']['_local'] = {
                         'x': self.player_x,
                         'y': self.player_y,
+                        'dx': local_p.get('dx', 0),
+                        'dy': local_p.get('dy', 0),
                         'spd': self.current_speed,
                         'alt': self.current_altitude,
                         'vehicle': self.current_vehicle_real_name,
                         'callsign': CONFIG.get('callsign', 'Me'),
-                        'color': CONFIG.get('color', '#FFCC11')
+                        'color': CONFIG.get('color', '#FFCC11'),
+                        'trail': existing_trail
                     }
+                    self.update_trail(self.shared_data['players']['_local'])
 
                 self.shared_data['airfields'] = list(self.airfields)
 
@@ -818,6 +934,9 @@ class OverlayWindow(RenderingMixin, GbuHudMixin, QWidget):
                         'grid_zero': getattr(self, 'grid_zero', None),
                         'grid_size': getattr(self, 'grid_size', None)
                     }
+
+                # Sync RWR threats to web
+                self.shared_data['rwr_threats'] = list(self.rwr_threats)
 
                 # Sync config to web server
                 self.shared_data['config'] = {
@@ -957,6 +1076,12 @@ class OverlayWindow(RenderingMixin, GbuHudMixin, QWidget):
                 dx = obj.get('dx', 0.0)
                 dy = obj.get('dy', 0.0)
 
+                # Store for RWR and other uses
+                self.player_x = x
+                self.player_y = y
+                if dx != 0 or dy != 0:
+                    self.current_heading = math.degrees(math.atan2(dx, -dy)) % 360
+
                 if self.spawn_time is None:
                     self.spawn_time = time.time()
                     self.flight_time = 0
@@ -1049,6 +1174,171 @@ class OverlayWindow(RenderingMixin, GbuHudMixin, QWidget):
                 to_remove.append(pid)
         for pid in to_remove:
             del self.players[pid]
+
+    # ─────────────────────────────────────────────
+    # RWR Scanning
+    # ─────────────────────────────────────────────
+
+    def _rwr_scan_tick(self):
+        """Periodic RWR scan callback with INS-like position stabilization."""
+        if not self.rwr_enabled:
+            return
+        if self.player_x is None or self.player_y is None:
+            return
+        if self.map_min is None or self.map_max is None:
+            return
+
+        # Clean up stale remote bearings (>10s old)
+        now = time.time()
+        stale_senders = [k for k, v in self.remote_rwr_bearings.items() if now - v.get('last_seen', 0) > 10.0]
+        for k in stale_senders:
+            del self.remote_rwr_bearings[k]
+
+        try:
+            threats = scan_rwr(
+                bbox=self.rwr_bbox,
+                heading_deg=self.current_heading,
+                roll_deg=self.current_roll,
+                player_x=self.player_x,
+                player_y=self.player_y,
+                map_min=self.map_min,
+                map_max=self.map_max
+            )
+
+            now = time.time()
+            high_roll = abs(self.current_roll) > 30  # Suppress updates during hard banks
+
+            if threats:
+                # Match new detections to existing tracks
+                for new_t in threats:
+                    matched = False
+                    for existing in self.rwr_threats:
+                        # Match by proximity on the map (within ~3km normalized)
+                        world_w = self.map_max[0] - self.map_min[0]
+                        match_threshold = 3000 / world_w if world_w > 0 else 0.05
+                        
+                        ex_x = existing.get('raw_x', existing['x'])
+                        ex_y = existing.get('raw_y', existing['y'])
+                        
+                        dx = new_t['x'] - ex_x
+                        dy = new_t['y'] - ex_y
+                        dist = math.sqrt(dx * dx + dy * dy)
+
+                        if dist < match_threshold:
+                            # Existing track found — smooth update (skip if high roll)
+                            existing['timestamp'] = now
+                            if new_t.get('label', 'UNK') != 'UNK':
+                                existing['label'] = new_t['label']
+                                existing['type'] = new_t.get('type', existing.get('type', 'UNK'))
+
+                            ex_x = existing.get('raw_x', existing['x'])
+                            ex_y = existing.get('raw_y', existing['y'])
+                            ex_dist = existing.get('raw_dist_m', existing.get('dist_m', 0))
+
+                            if not high_roll:
+                                # Exponential moving average for position stability
+                                alpha = 0.15
+                                ex_x = ex_x * (1 - alpha) + new_t['x'] * alpha
+                                ex_y = ex_y * (1 - alpha) + new_t['y'] * alpha
+                                ex_dist = new_t.get('dist_m', ex_dist)
+                            
+                            existing['raw_x'] = ex_x
+                            existing['raw_y'] = ex_y
+                            existing['raw_dist_m'] = ex_dist
+                            
+                            # Restore single-source coordinates as default for the upcoming frame
+                            existing['x'] = ex_x
+                            existing['y'] = ex_y
+                            existing['dist_m'] = ex_dist
+                            
+                            existing['bearing_abs'] = new_t.get('bearing_abs', existing.get('bearing_abs', 0))
+                            existing['player_x'] = self.player_x
+                            existing['player_y'] = self.player_y
+                            matched = True
+                            break
+
+                    if not matched and not high_roll:
+                        # New track — lock initial position
+                        new_t['timestamp'] = now
+                        new_t['raw_x'] = new_t['x']
+                        new_t['raw_y'] = new_t['y']
+                        new_t['raw_dist_m'] = new_t.get('dist_m', 0)
+                        self.rwr_threats.append(new_t)
+
+            # Expire old tracks (hold time = 5 seconds)
+            self.rwr_threats = [
+                t for t in self.rwr_threats
+                if now - t.get('timestamp', 0) < 5.0
+            ]
+
+            # Broadcast local bearings
+            if self.rwr_threats:
+                local_bearings = []
+                for t in self.rwr_threats:
+                    if t.get('bearing_abs') is not None:
+                        local_bearings.append({
+                            'bearing_abs': round(t['bearing_abs'], 1),
+                            'label': t.get('label', 'UNK')
+                        })
+                
+                if local_bearings:
+                    packet = {
+                        'type': 'rwr_bearings',
+                        'id': f"{CONFIG.get('callsign')}_rwr",
+                        'sender': CONFIG.get('callsign', 'Pilot'),
+                        'callsign': CONFIG.get('callsign', 'Me'),
+                        'x': round(self.player_x, 4),
+                        'y': round(self.player_y, 4),
+                        'bearings': local_bearings
+                    }
+                    self.broadcast_packet(packet)
+
+            # --- Multi-Aircraft Triangulation ---
+            # Try to triangulate local threats with remote bearings
+            if 'match_bearings' in globals() and self.remote_rwr_bearings:
+                matched_groups = match_bearings(self.rwr_threats, self.remote_rwr_bearings, threshold_deg=15.0)
+                for group in matched_groups:
+                    res = triangulate(group)
+                    if res:
+                        # Find the local threat to update it
+                        for t in self.rwr_threats:
+                            if t.get('bearing_abs') == group[0]['bearing_deg']:
+                                # Update position with triangulated result
+                                t['x'] = res['x']
+                                t['y'] = res['y']
+                                t['is_triangulated'] = True
+                                t['triangulation_confidence'] = res['confidence']
+                                
+                                # Convert triangulated normalized pos back to meters for distance
+                                world_w = self.map_max[0] - self.map_min[0]
+                                world_h = self.map_max[1] - self.map_min[1]
+                                dx_norm = t['x'] - self.player_x
+                                dy_norm = t['y'] - self.player_y
+                                t['dist_m'] = math.sqrt((dx_norm * world_w)**2 + (dy_norm * world_h)**2)
+                                break
+
+            if CONFIG.get('debug_mode', False) and threats:
+                print(f"[RWR] Active tracks: {len(self.rwr_threats)}, "
+                      f"roll={self.current_roll:.1f}°, "
+                      f"labels={[t.get('label','?') for t in self.rwr_threats]}")
+
+        except Exception as e:
+            print(f"[RWR] Scan error: {e}")
+
+    def set_rwr_enabled(self, enabled):
+        """Enable or disable RWR detection at runtime."""
+        self.rwr_enabled = enabled
+        if enabled and RWR_AVAILABLE and not hasattr(self, 'rwr_timer'):
+            rwr_hz = CONFIG.get('rwr_scan_hz', 2)
+            rwr_interval = max(100, int(1000 / rwr_hz))
+            self.rwr_timer = QTimer(self)
+            self.rwr_timer.timeout.connect(self._rwr_scan_tick)
+            self.rwr_timer.start(rwr_interval)
+            print(f"[RWR] Enabled at {rwr_hz}Hz")
+        elif not enabled and hasattr(self, 'rwr_timer'):
+            self.rwr_timer.stop()
+            self.rwr_threats = []
+            print("[RWR] Disabled")
 
     # ─────────────────────────────────────────────
     # Broadcasting
