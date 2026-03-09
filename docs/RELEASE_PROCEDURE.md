@@ -14,10 +14,10 @@ The executable must be rebuilt whenever `main.py` or core logic changes.
 ```
 Verify that `dist/Link18.exe` has been updated with a current timestamp.
 
-## 3. Update Release Script
-Update `create_release.py` to reflect the new version number in the `release_name` variable:
+## 3. Update Version Tag
+Update `config.py` to reflect the new version number in the `VERSION_TAG` variable:
 ```python
-release_name = "Link18_v1.X.Y.zip"
+VERSION_TAG = "v1.X.Y"
 ```
 
 ## 4. Run Release Script

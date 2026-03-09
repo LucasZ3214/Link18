@@ -16,6 +16,9 @@ Link18/
 ├── key_monitor.py       # Input: Global keyboard shortcuts
 ├── vws.py               # Audio: Voice Warning System alerts
 ├── auto_calibrate_new.py# Calibration: OpenCV-based map alignment
+├── rwr_extractor.py     # RWR Sync: OCR-based threat extraction
+├── triangulation.py     # RWR Sync: Multi-station intersection math
+├── debug_rwr.py         # Diagnostic: Tool for RWR screen capture and OCR testing
 ├── vehicles.json        # Translation: Vehicle ID to real name map
 ├── Link18.spec          # Build: PyInstaller specification
 └── requirements.txt     # Deps: Python dependencies
@@ -69,6 +72,13 @@ The application uses a Mixin-based architecture to separate concerns while maint
 | `network.py` | `NetworkReceiver` | UDP listener thread for squad coordination data. |
 | `key_monitor.py` | `KeyMonitor` | Global keyboard listener for shortcuts. |
 | `ui.py` | `TrayController` | System tray integration and application management. |
+
+### RWR Extraction & Triangulation Pipeline
+
+The RWR feature extracts bearing lines from the player's screen using computer vision and shares them with the squad to geolocate SAMs.
+1. **Capture & OCR (`rwr_extractor.py`)**: Continuously captures a defined portion of the screen (`rwr_bbox`) and uses Tesseract OCR to read degrees around the RWR scope. Extracts a list of active threat bearings relative to aircraft heading.
+2. **Network Sync (`network.py`)**: Bearings are added to the player's current location and heading, then broadcasted as `rwr_bearings` UDP packets.
+3. **Intersection Math (`triangulation.py`)**: Each client receives bearings from multiple players and computes mathematical intersections (crossings) to estimate the threat's exact coordinates.
 
 ### Voice Warning System (`vws.py`)
 
@@ -145,7 +155,10 @@ The overlay requires precise alignment with the in-game map. We use OpenCV to au
 {"type": "point_of_interest", "id": "POI1", "x": 0.6, "y": 0.7, "owner": "Callsign"}
 ```
 
-
+**RWR Bearings:**
+```json
+{"type": "rwr_bearings", "sender": "Callsign", "x": 0.5, "y": 0.3, "bearings": [{"angle": 315, "threat_type": "SAM"}, {"angle": 45, "threat_type": "RADAR"}]}
+```
 
 ### Build Commands
 

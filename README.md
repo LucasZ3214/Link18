@@ -1,4 +1,4 @@
-# Link18 v1.7.0 - Tactical Overlay for War Thunder
+# Link18 v1.8.0-beta - Tactical Overlay for War Thunder
 
 **Link18** is a transparent tactical overlay and web-based map for War Thunder that enables real-time squad coordination via shared markers, flight timers, and NATO-standard unit symbology.
 
@@ -13,14 +13,14 @@
 
 ---
 
-## What's New in v1.7.0
+## What's New in v1.8.0-beta
 
 | Feature | Description |
 |---------|-------------|
-| **Exclusive Commander Mode** | Added AWACS/Commander (COM) Mode with exclusive server-enforced access |
-| **Active Commander UI** | Displays the current active commander's name on the Web Map and PC Overlay in real-time |
-| **NATO Hostile Air Symbology** | Ground Commander can draw and place NATO-standard Hostile Air (inverted V) markers |
+| **RWR Optical Extraction** | Reads the on-screen Radar Warning Receiver to extract threat bearings using OCR |
+| **Squad Triangulation** | Shares RWR bearings over the network to triangulate exact SAM/Radar positions |
 | **Web Map UI Polish** | Separated core CSS/JS files and improved responsive styling for tactical tools |
+| **System Tray Integration** | App minimizes to the system tray with a custom icon and right-click context menu |
 
 ---
 
@@ -41,6 +41,17 @@
 | **Smart Declutter** | Overlapping icons auto-hide, SAMs prioritized |
 | **VWS Audio** | Configurable voice/tone warnings for SAM and AAA threats |
 | **GBU HUD** | GBU-62 JDAM-ER TOT/TTI Timer [BETA] |
+
+---
+
+## Radar Warning Receiver (RWR) Sync
+
+Link18 can extract data from your aircraft's Radar Warning Receiver using Optical Character Recognition (OCR). This feature captures the UI and reads threat bearings.
+
+**Capabilities:**
+- **Local Threat Lines**: Draws lines on your overlay indicating the bearing of radar threats.
+- **Squad Triangulation**: Broadcasts bearing data to your team. When multiple vehicles detect the same radar, Link18 computes the mathematical intersection (triangulation) to pinpoint and display the threat's exact position on the map.
+- **Customizable Capture Area**: Adjust `rwr_bbox` to match your screen resolution and RWR size.
 
 ---
 
@@ -109,6 +120,9 @@ Click the **Settings** button (bottom right) to:
     "vws_interval": 5,
     "vws_normalize": false,
     "show_gbu_timers": false,
+    "enable_rwr": false,
+    "rwr_bbox": "[30,340,200,200]",
+    "rwr_scan_hz": 2,
     "debug_mode": false
 }
 ```
@@ -132,6 +146,9 @@ Click the **Settings** button (bottom right) to:
 | `vws_interval` | float | Minimum seconds between repeated warnings |
 | `vws_normalize` | bool | Normalize audio loudness on load |
 | `show_gbu_timers`| bool | `true` = Show GBU HUD on startup, `false` = Hidden |
+| `enable_rwr` | bool | Enable OCR RWR extraction (requires Tesseract) |
+| `rwr_bbox` | string | `[x, y, width, height]` array of capture area |
+| `rwr_scan_hz` | float | Full-screen capture rate for OCR (Hz) |
 
 ---
 
@@ -165,6 +182,17 @@ Detailed technical documentation, including project structure, architecture, and
 ---
 
 ## Previous Releases
+
+<details>
+<summary>v1.7.0</summary>
+
+| Feature | Description |
+|---------|-------------|
+| **Exclusive Commander Mode** | Added AWACS/Commander (COM) Mode with exclusive server-enforced access |
+| **Active Commander UI** | Displays the current active commander's name on the Web Map and PC Overlay in real-time |
+| **NATO Hostile Air Symbology** | Ground Commander can draw and place NATO-standard Hostile Air (inverted V) markers |
+
+</details>
 
 <details>
 <summary>v1.6.1</summary>
