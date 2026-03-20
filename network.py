@@ -27,7 +27,7 @@ class NetworkReceiver(QThread):
         
         while True:
             try:
-                data, addr = sock.recvfrom(1024)
+                data, addr = sock.recvfrom(65535)
                 packet = json.loads(data.decode('utf-8'))
                 # No longer overwriting ID with IP to support multi-interface reception deduplication
                 self.data_received.emit(packet)

@@ -16,11 +16,13 @@ from PyQt6.QtGui import QColor, QPainter
 from PyQt6.QtWidgets import QWidget, QApplication
 
 from config import (
-    CONFIG, UDP_PORT, API_URL, POLL_INTERVAL_MS, DEBUG_MODE, VERSION_TAG
+    CONFIG, UDP_PORT, API_URL, POLL_INTERVAL_MS, DEBUG_MODE, VERSION_TAG,
+    ENABLE_VELOCITY_VECTOR, ENABLE_JOYSTICK_ZOOM
 )
 from network import NetworkReceiver, TelemetryFetcher
 from rendering import RenderingMixin
 from gbu_hud import GbuHudMixin
+from hardware_input import JoystickManager
 
 # Lazy imports for optional modules
 try:
@@ -142,6 +144,20 @@ class OverlayWindow(RenderingMixin, GbuHudMixin, QWidget):
         self.phys_timer = QTimer(self)
         self.phys_timer.timeout.connect(self.update_physics)
         self.phys_timer.start(100)
+
+        # --- Velocity Vector & FOV State ---
+        self.velocity_vector_enabled = ENABLE_VELOCITY_VECTOR
+        self.is_zoomed = False
+        self.current_aoa = 0.0
+        self.current_aos = 0.0
+        self.joystick_manager = JoystickManager()
+
+        # High-frequency HUD repaint timer (~60Hz) for smooth velocity vector
+        if self.velocity_vector_enabled:
+            self.hud_repaint_timer = QTimer(self)
+            self.hud_repaint_timer.timeout.connect(self.update)
+            self.hud_repaint_timer.start(16)  # ~60fps
+            print("[HUD] Velocity vector 60Hz repaint timer started")
 
         # --- RWR Detection ---
         # --- RWR Detection ---
@@ -621,6 +637,12 @@ class OverlayWindow(RenderingMixin, GbuHudMixin, QWidget):
         self.overlay_enabled = enabled
         self.update()
 
+    def toggle_zoom(self):
+        if self.velocity_vector_enabled:
+            self.is_zoomed = not self.is_zoomed
+            print(f"[HUD] FOV Zoom Toggled: {'ZOOMED' if self.is_zoomed else 'NORMAL'}")
+            self.update()
+
     def trigger_calibration(self):
         print("[CALIBRATE] Hiding overlay for clean screenshot...")
         self.hide()
@@ -823,6 +845,9 @@ class OverlayWindow(RenderingMixin, GbuHudMixin, QWidget):
             if state_data:
                 self.current_altitude = state_data.get('H, m', 0)
                 self.current_speed = state_data.get('TAS, km/h', 0)
+                if self.velocity_vector_enabled:
+                    self.current_aoa = state_data.get('AoA, deg', 0.0)
+                    self.current_aos = state_data.get('AoS, deg', 0.0)
 
             ind_data = fetched.get('indicator_data')
             if ind_data:

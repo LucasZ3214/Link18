@@ -630,6 +630,11 @@ class RenderingMixin:
         # --- SAM / AAA THREAT WARNING ---
         self._draw_threat_warning(painter)
 
+        # --- VELOCITY VECTOR / FPM ---
+        if getattr(self, 'velocity_vector_enabled', False) and not self.show_marker:
+            self._draw_velocity_vector(painter, screen_width, self.height())
+
+
     def _draw_player_list(self, painter, screen_width, right_margin):
         """Draw the player list on the right side of the screen."""
         list_y = 55
@@ -1358,3 +1363,79 @@ class RenderingMixin:
 
                 painter.setPen(QPen(QColor(255, 0, 0)))
                 painter.drawText(warn_x, warn_y, warn_text)
+
+    # ─────────────────────────────────────────────
+    # Velocity Vector / Flight Path Marker
+    # ─────────────────────────────────────────────
+
+    def _draw_velocity_vector(self, painter, screen_w, screen_h):
+        """
+        Draws the velocity vector (FPM) based on AoA, AoS, and Roll.
+        Applies a dynamic FOV zoom factor (either from Joystick or Keyboard).
+        """
+        
+        # 1. Determine Interpolated FOV Zoom
+        # joystick factor is 0.0 to 1.0. 0.0 = Normal, 1.0 = Zoomed.
+        joystick_factor = None
+        if hasattr(self, 'joystick_manager'):
+            joystick_factor = self.joystick_manager.get_zoom_interpolation_factor()
+            
+        fov_normal = CONFIG.get('hud_fov_normal', 15.0)
+        fov_zoomed = CONFIG.get('hud_fov_zoomed', 30.0)
+        
+        current_fov_scale = fov_normal
+        
+        if joystick_factor is not None:
+             # Joystick override
+             current_fov_scale = fov_normal + (fov_zoomed - fov_normal) * joystick_factor
+        elif getattr(self, 'is_zoomed', False):
+             # Keyboard toggle
+             current_fov_scale = fov_zoomed
+             
+        # 2. Extract telemetry
+        alpha = getattr(self, 'current_aoa', 0.0) # Pitch offset in deg
+        beta = getattr(self, 'current_aos', 0.0)  # Yaw offset in deg
+        roll = getattr(self, 'current_roll', 0.0) # HUD roll
+
+        # Clamp extreme values so the FPM doesn't violently leave the screen
+        alpha = max(-45.0, min(45.0, alpha))
+        beta = max(-45.0, min(45.0, beta))
+
+        # Calculate Offset in Pixels
+        offset_y = alpha * current_fov_scale
+        offset_x = -beta * current_fov_scale # Beta is positive when slipping right, so we move FPM left to match the nose pointing right relative to flight path. 
+
+        center_x = screen_w / 2.0
+        center_y = screen_h / 2.0
+        
+        # Apply Roll Rotation matrix to the offset vector
+        roll_rad = math.radians(roll)
+        
+        # FPM moves relative to aircraft roll.
+        # This rotation ensures that when banking 90 deg, a positive AoA moves the FPM horizontally.
+        rx = offset_x * math.cos(roll_rad) - offset_y * math.sin(roll_rad)
+        ry = offset_x * math.sin(roll_rad) + offset_y * math.cos(roll_rad)
+        
+        final_x = center_x + rx
+        final_y = center_y + ry
+
+        painter.save()
+        painter.translate(final_x, final_y)
+        painter.rotate(roll) # The symbol itself rotates with the aircraft
+
+        # 3. Draw FPM Symbol
+        # Classic FPM: Circle with 3 ticks (Left wing, right wing, top fin)
+        painter.setPen(QPen(QColor(0, 255, 0), 2))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        
+        r = 10 
+        painter.drawEllipse(QPointF(0, 0), r, r)
+        
+        # Left wing
+        painter.drawLine(QPointF(-r, 0), QPointF(-r - 15, 0))
+        # Right wing
+        painter.drawLine(QPointF(r, 0), QPointF(r + 15, 0))
+        # Top fin
+        painter.drawLine(QPointF(0, -r), QPointF(0, -r - 10))
+
+        painter.restore()
