@@ -1,4 +1,4 @@
-# Link18 v1.8.0-beta - Tactical Overlay for War Thunder
+# Link18 v1.8.1 - Tactical Overlay for War Thunder
 
 **Link18** is a transparent tactical overlay and web-based map for War Thunder that enables real-time squad coordination via shared markers, flight timers, and NATO-standard unit symbology.
 
@@ -13,14 +13,14 @@
 
 ---
 
-## What's New in v1.8.0-beta
+## What's New in v1.8.1
 
 | Feature | Description |
 |---------|-------------|
-| **RWR Optical Extraction** | Reads the on-screen Radar Warning Receiver to extract threat bearings using OCR |
-| **Squad Triangulation** | Shares RWR bearings over the network to triangulate exact SAM/Radar positions |
-| **Web Map UI Polish** | Separated core CSS/JS files and improved responsive styling for tactical tools |
-| **System Tray Integration** | App minimizes to the system tray with a custom icon and right-click context menu |
+| **Velocity Vector / FPM** | Configurable Flight Path Marker overlay with adjustable FOV and zoom toggle |
+| **Joystick Zoom Input** | Hardware joystick axis support for zoom control |
+| **RWR Template Matching** | Improved RWR extraction using template-based character recognition |
+| **Stability** | Version stabilized from v1.8.0-beta with bug fixes |
 
 ---
 
@@ -182,6 +182,18 @@ Detailed technical documentation, including project structure, architecture, and
 ---
 
 ## Previous Releases
+
+<details>
+<summary>v1.8.0-beta</summary>
+
+| Feature | Description |
+|---------|-------------|
+| **RWR Optical Extraction** | Reads the on-screen Radar Warning Receiver to extract threat bearings using OCR |
+| **Squad Triangulation** | Shares RWR bearings over the network to triangulate exact SAM/Radar positions |
+| **Web Map UI Polish** | Separated core CSS/JS files and improved responsive styling for tactical tools |
+| **System Tray Integration** | App minimizes to the system tray with a custom icon and right-click context menu |
+
+</details>
 
 <details>
 <summary>v1.7.0</summary>
