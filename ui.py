@@ -314,6 +314,12 @@ class ControllerWindow(QWidget):
         self.gbu_toggle.stateChanged.connect(self.toggle_gbu)
         toggles_layout.addWidget(self.gbu_toggle)
         
+        self.vv_toggle = QCheckBox("Enable Velocity Vector (FPM)")
+        self.vv_toggle.setChecked(CONFIG.get('enable_velocity_vector', True))
+        self.vv_toggle.setStyleSheet("font-size: 14px; color: #222;")
+        self.vv_toggle.stateChanged.connect(self.toggle_velocity_vector)
+        toggles_layout.addWidget(self.vv_toggle)
+        
         layout.addWidget(toggles_group)
         
         # -- Online Players --
@@ -376,6 +382,22 @@ class ControllerWindow(QWidget):
             self.monitor.gbu_enabled = enabled
         print(f"[CONTROLLER] GBU Timers {'ENABLED' if enabled else 'DISABLED'}")
         QTimer.singleShot(500, self.update_player_list)
+
+    def toggle_velocity_vector(self, state):
+        enabled = (state == 2)
+        self.overlay.velocity_vector_enabled = enabled
+        CONFIG['enable_velocity_vector'] = enabled
+        # Manage the 60Hz repaint timer
+        if enabled:
+            if not hasattr(self.overlay, 'hud_repaint_timer') or self.overlay.hud_repaint_timer is None:
+                self.overlay.hud_repaint_timer = QTimer(self.overlay)
+                self.overlay.hud_repaint_timer.timeout.connect(self.overlay.update)
+            self.overlay.hud_repaint_timer.start(16)
+        else:
+            if hasattr(self.overlay, 'hud_repaint_timer') and self.overlay.hud_repaint_timer is not None:
+                self.overlay.hud_repaint_timer.stop()
+        print(f"[CONTROLLER] Velocity Vector {'ENABLED' if enabled else 'DISABLED'}")
+        self.overlay.update()
 
     def update_player_list(self):
         """Refresh the online players display"""

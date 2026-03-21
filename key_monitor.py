@@ -4,7 +4,7 @@ Handles global keyboard input for overlay activation, calibration, and GBU contr
 """
 from PyQt6.QtCore import pyqtSignal, QObject
 from pynput import keyboard
-
+from config import ZOOM_TOGGLE_KEY
 
 class KeyMonitor(QObject):
     show_signal = pyqtSignal()
@@ -14,6 +14,7 @@ class KeyMonitor(QObject):
     calibrate_signal = pyqtSignal()  # New signal for calibration
     bomb_release_signal = pyqtSignal() # Signal for bomb release
     toggle_console_signal = pyqtSignal() # Signal for console toggle
+    zoom_toggle_signal = pyqtSignal() # Toggle Velocity Vector FOV Zoom
 
     def __init__(self, activation_key='m'):
         super().__init__()
@@ -36,6 +37,8 @@ class KeyMonitor(QObject):
                         self.calibrate_signal.emit()
                 elif key.char.lower() == 'j':
                     self.toggle_console_signal.emit()
+                elif key.char.lower() == ZOOM_TOGGLE_KEY.lower():
+                    self.zoom_toggle_signal.emit()
             elif key == keyboard.Key.space:
                 if self.gbu_enabled:
                     self.bomb_release_signal.emit()

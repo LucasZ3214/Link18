@@ -144,7 +144,9 @@ OCR_CONFIDENCE = 0.35
 
 # Cached label templates for OCR
 _label_templates = None
+_char_templates = None
 _TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), 'rwr_templates')
+_CHARS_DIR = os.path.join(_TEMPLATES_DIR, 'chars')
 
 
 def _load_file_templates():
@@ -174,7 +176,36 @@ def _load_file_templates():
                 templates[label].append(resized)
 
     if templates:
-        print(f"[RWR] Loaded {len(templates)} file template(s): {list(templates.keys())}")
+        print(f"[RWR] Loaded {len(templates)} label template(s): {list(templates.keys())}")
+    return templates
+
+
+def _load_char_templates():
+    """
+    Load individual character templates from rwr_templates/chars/ directory.
+    """
+    templates = {}
+    if not os.path.isdir(_CHARS_DIR):
+        return templates
+
+    for fname in os.listdir(_CHARS_DIR):
+        if not fname.lower().endswith('.png'):
+            continue
+        char = os.path.splitext(fname)[0].upper()
+        fpath = os.path.join(_CHARS_DIR, fname)
+        img = cv2.imread(fpath, cv2.IMREAD_GRAYSCALE)
+        if img is not None:
+            _, binary = cv2.threshold(img, 100, 255, cv2.THRESH_BINARY)
+            templates[char] = [binary]
+            # Add scales for robustness
+            for scale in [0.85, 1.15]:
+                h, w = binary.shape
+                sh, sw = max(1, int(h * scale)), max(1, int(w * scale))
+                resized = cv2.resize(binary, (sw, sh), interpolation=cv2.INTER_NEAREST)
+                templates[char].append(resized)
+
+    if templates:
+        print(f"[RWR] Loaded {len(templates)} character template(s): {sorted(list(templates.keys()))}")
     return templates
 
 
@@ -182,15 +213,15 @@ def _generate_templates():
     """
     Get OCR templates. Prefers file-based templates from rwr_templates/,
     falls back to cv2.putText-rendered templates.
+    Now also loads character-level templates.
     """
-    global _label_templates
-    if _label_templates is not None:
-        return _label_templates
+    global _label_templates, _char_templates
+    if _label_templates is None:
+        _label_templates = _load_file_templates()
+    if _char_templates is None:
+        _char_templates = _load_char_templates()
 
-    # Try file-based first
-    _label_templates = _load_file_templates()
-
-    # Fall back to generated templates for missing labels
+    # Fall back to generated templates for missing labels (if not loaded from files)
     db = get_rwr_db()
     labels = list(db.get('threat_labels', {}).keys())
     if not labels:
@@ -254,6 +285,7 @@ def _ocr_contact(mask, contact, image_center, image_radius, image=None):
     best_label = 'UNK'
     best_score = OCR_CONFIDENCE
 
+    # 1. Try whole-label matches (Fastest/Reliable for known labels)
     for label, tmpl_list in templates.items():
         for tmpl in tmpl_list:
             if tmpl.shape[0] > crop.shape[0] or tmpl.shape[1] > crop.shape[1]:
@@ -267,11 +299,117 @@ def _ocr_contact(mask, contact, image_center, image_radius, image=None):
             except:
                 continue
 
+    # 2. If no full label match, try character-by-character recognition
+    if best_label == 'UNK' and _char_templates:
+        best_label = _ocr_by_chars(crop)
+
     # Auto-save unknown contacts as template candidates
     if best_label == 'UNK' and crop is not None:
         _auto_save_template(crop)
 
     return best_label
+
+
+def _ocr_by_chars(crop):
+    """
+    Perform OCR by segmenting the crop into individual characters and matching
+    each against the character library.
+    """
+    if _char_templates is None:
+        return 'UNK'
+
+    # Find character blobs using contours
+    contours, _ = cv2.findContours(crop, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    # Get bounding boxes and sort left-to-right
+    boxes = []
+    for cnt in contours:
+        x, y, bw, bh = cv2.boundingRect(cnt)
+        if bw < 2 or bh < 2:
+            continue
+        # Filter artifacts (too thin or too small)
+        if bw < 3 and bh < 5:
+            continue
+        boxes.append((x, y, bw, bh))
+
+    if not boxes:
+        return 'UNK'
+
+    boxes.sort(key=lambda b: b[0])
+
+    # Merge overlapping/close boxes
+    merged = []
+    for box in boxes:
+        if merged and box[0] < merged[-1][0] + merged[-1][2] + 2:
+            prev = merged[-1]
+            x = min(prev[0], box[0])
+            y = min(prev[1], box[1])
+            x2 = max(prev[0] + prev[2], box[0] + box[2])
+            y2 = max(prev[1] + prev[3], box[1] + box[3])
+            merged[-1] = (x, y, x2 - x, y2 - y)
+        else:
+            merged.append(box)
+
+    recognized = ""
+    # Recognition threshold for individual characters might need to be lower
+    char_threshold = OCR_CONFIDENCE * 0.82
+
+    for x, y, bw, bh in merged:
+        # Extract character blob
+        char_blob = crop[y:y+bh, x:x+bw]
+
+        best_char = '?'
+        best_c_score = char_threshold
+
+        # Standardize for comparison (pad/crop to 8x14 matching the library)
+        # Reuse logic from build_char_lib for best results
+        # 1. Pad/Scale char_blob to 8x14
+        h, w = char_blob.shape
+        scale = min(8.0/w, 14.0/h) if (w > 8 or h > 14) else 1.0
+        if scale < 1.0:
+            resized = cv2.resize(char_blob, (int(w*scale), int(h*scale)), interpolation=cv2.INTER_AREA)
+        else:
+            resized = char_blob
+        
+        rh, rw = resized.shape
+        top, left = (14-rh)//2, (8-rw)//2
+        processed_blob = cv2.copyMakeBorder(resized, top, 14-rh-top, left, 8-rw-left, cv2.BORDER_CONSTANT, value=0)
+
+        for char, tmpls in _char_templates.items():
+            for tmpl in tmpls:
+                # Library images are 8x14
+                try:
+                    res = cv2.matchTemplate(processed_blob, tmpl, cv2.TM_CCOEFF_NORMED)
+                    _, m_val, _, _ = cv2.minMaxLoc(res)
+                    if m_val > best_c_score:
+                        best_c_score = m_val
+                        best_char = char
+                except:
+                    continue
+
+        if best_char != '?':
+            recognized += best_char
+        else:
+            # SAVE UNKNOWN CHARACTER BOLD BLOB
+            # Only save if it has enough content to be a character (not just noise)
+            if cv2.countNonZero(processed_blob) > 5:
+                ts = int(time.time() * 1000) % 1000000
+                unkn_path = os.path.join(_CHARS_DIR, f"unknown_{ts}.png")
+                # Deduplication logic: check if we already saved a similar unknown
+                already_saved = False
+                for existing in os.listdir(_CHARS_DIR):
+                    if existing.startswith("unknown_") and existing.endswith(".png"):
+                        ex_img = cv2.imread(os.path.join(_CHARS_DIR, existing), cv2.IMREAD_GRAYSCALE)
+                        if ex_img is not None and ex_img.shape == processed_blob.shape:
+                            sim = cv2.matchTemplate(processed_blob, ex_img, cv2.TM_CCOEFF_NORMED)
+                            if cv2.minMaxLoc(sim)[1] > 0.9:
+                                already_saved = True
+                                break
+                if not already_saved:
+                    cv2.imwrite(unkn_path, processed_blob)
+                    print(f"[RWR] Unrecognized char saved: {unkn_path}")
+
+    return recognized if len(recognized) >= 1 else 'UNK'
 
 
 def _auto_save_template(crop):

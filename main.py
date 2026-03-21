@@ -94,6 +94,7 @@ def main():
     monitor.calibrate_signal.connect(overlay.trigger_calibration, Qt.ConnectionType.QueuedConnection)
     monitor.bomb_release_signal.connect(overlay.on_bomb_release, Qt.ConnectionType.QueuedConnection)
     monitor.toggle_console_signal.connect(overlay.toggle_console, Qt.ConnectionType.QueuedConnection)
+    monitor.zoom_toggle_signal.connect(overlay.toggle_zoom, Qt.ConnectionType.QueuedConnection)
     controller.monitor = monitor
 
     sys.exit(app.exec())
