@@ -2104,9 +2104,18 @@ function draw() {
 
     function isFriendlyColor(c) {
         if (!c) return false;
-        const s = c.toString();
-        return s.includes('#043') || s.includes('4,63,255') ||
-            s.includes('#174DFF') || s.includes('23,77,255');
+        const s = c.toString().toLowerCase();
+        
+        // Explicit War Thunder enemy reds
+        const isEnemy = s.includes('#fa0c00') || s.includes('250,12,0') || 
+                        s.includes('#ff7e7e') || s.includes('255,126,126') ||
+                        s.includes('#ff0000') || s.includes('255,0,0');
+                        
+        // If explicitly enemy red, it is hostile
+        if (isEnemy) return false;
+        
+        // Any other color (including WT Blue, or custom player Green/Yellow/Cyan) is treated as Friendly
+        return true;
     }
 
     // Installation label cache (persistent across frames and page reloads)
