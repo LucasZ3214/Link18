@@ -1,4 +1,4 @@
-﻿const canvas = document.getElementById('mapCanvas');
+const canvas = document.getElementById('mapCanvas');
 const ctx = canvas.getContext('2d');
 const statusEl = document.getElementById('status');
 const timerEl = document.getElementById('timer');
@@ -41,6 +41,20 @@ function toggleLegend() { /* ... existing ... */ }
 function toggleSettings() {
     const panel = document.getElementById('settingsPanel');
     panel.style.display = (panel.style.display === 'none') ? 'block' : 'none';
+}
+
+function toggleNuclearThunder(checked) {
+    apiCommand({ type: 'set_nuclear_thunder', value: checked });
+    draw();
+}
+
+// Common REST API command wrapper
+function apiCommand(cmdData) {
+    return fetch('/api/command', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(cmdData)
+    }).catch(e => console.error("API Error", e));
 }
 
 // --- Speed Override Logic ---
@@ -536,6 +550,12 @@ async function fetchData() {
             if (lastData.config && lastData.config.version) {
                 const vLabel = document.getElementById('versionLabel');
                 if (vLabel) vLabel.innerText = "Link18 " + lastData.config.version;
+            }
+            if (lastData.config && lastData.config.nuclear_thunder_mode !== undefined) {
+                const ntCheckbox = document.getElementById('nuclearThunderCheckbox');
+                if (ntCheckbox && ntCheckbox.checked !== lastData.config.nuclear_thunder_mode) {
+                    ntCheckbox.checked = lastData.config.nuclear_thunder_mode;
+                }
             }
 
             // DEBUG: Log first update to see data structure
@@ -1712,6 +1732,301 @@ function draw() {
         ctx.stroke();
     }
 
+    // --- NUCLEAR THUNDER: GROUND UNITS & AIRCRAFT ---
+    if (lastData && lastData.config && lastData.config.nuclear_thunder_mode && lastData.ground_units) {
+        let clusters = [];
+        const threshold = 0.005; // Nuclear Thunder uses wider clustering range
+
+        lastData.ground_units.forEach(unit => {
+            if (!unit) return;
+            const icon = (unit.icon || '').toLowerCase();
+            const type = unit.type || '';
+            let added = false;
+            
+            let ux = unit.x !== undefined ? unit.x : ((unit.sx + unit.ex) / 2);
+            let uy = unit.y !== undefined ? unit.y : ((unit.sy + unit.ey) / 2);
+            
+            // Do not cluster aircraft, airfields, or bombers
+            if (type === 'aircraft' || type === 'airfield' || type === 'respawn_base_bomber') {
+                 clusters.push({
+                    ...unit, x: ux, y: uy, count: 1, type: type, icon: unit.icon,
+                    isFriendly: isFriendlyColor(unit.color),
+                    isBomberSpawn: type === 'respawn_base_bomber',
+                    units: [unit]
+                 });
+                 return;
+            }
+
+            for (let c of clusters) {
+                if (c.type === 'aircraft' || c.type === 'airfield' || c.type === 'respawn_base_bomber') continue;
+                
+                // Nuclear Thunder MUST also separate clusters by Friendly/Hostile like standard mode!
+                const isClusterFriendly = isFriendlyColor(c.units[0].color);
+                if (isFriendlyColor(unit.color) !== isClusterFriendly) continue;
+                
+                const dist = Math.hypot(ux - c.x, uy - c.y);
+                if (dist < threshold) {
+                    c.count++;
+                    c.units.push(unit);
+                    c.x = (c.x * (c.count-1) + ux) / c.count;
+                    c.y = (c.y * (c.count-1) + uy) / c.count;
+                    if (icon.includes('sam')) c.hasSam = true;
+                    if (icon.includes('aa') || icon.includes('spaa')) c.hasAaa = true;
+                    if (icon.includes('ammo')) c.hasAmmo = true;
+                    if (icon.includes('fuel')) c.hasFuel = true;
+                    if (icon.includes('tankstorage')) c.hasTank = true;
+                    added = true;
+                    break;
+                }
+            }
+            if (!added) {
+                clusters.push({
+                    x: ux, y: uy, count: 1, units: [unit],
+                    icon: icon, color: unit.color, type: type,
+                    hasSam: icon.includes('sam'),
+                    hasAaa: icon.includes('aa') || icon.includes('spaa'),
+                    hasAmmo: icon.includes('ammo'),
+                    hasFuel: icon.includes('fuel'),
+                    hasTank: icon.includes('tankstorage'),
+                    isBomberSpawn: type === 'respawn_base_bomber',
+                    dx: unit.dx || 0, dy: unit.dy || 0,
+                    isFriendly: isFriendlyColor(unit.color)
+                });
+            }
+        });
+
+        const baseScaleFactor = (lastData.config && lastData.config.web_marker_scale) || 2.3;
+        const currentMarkerScale = (typeof baselineScale !== 'undefined' ? baselineScale : 1.0) * baseScaleFactor * userMarkerScale;
+
+        let ntConvoyIndex = 0;
+
+        clusters.forEach(c => {
+            const isConvoy = c.type !== 'aircraft' && c.type !== 'airfield' && c.type !== 'respawn_base_bomber';
+            const currentConvoyIndex = isConvoy ? ntConvoyIndex++ : -1;
+
+            const [sx, sy] = worldToScreen(c.x, c.y);
+            ctx.save();
+            ctx.translate(sx, sy);
+            
+            const isFriendly = isFriendlyColor(c.color);
+            const unitColor = isFriendly ? '#7ee2ff' : '#ff7e7e';
+            ctx.fillStyle = unitColor;
+            ctx.strokeStyle = '#000000';
+            ctx.lineWidth = 1.5 * currentMarkerScale;
+            
+            let size = 18 * currentMarkerScale;
+            
+            if (c.type === 'airfield') {
+                // Do not draw airfields as ground targets
+                ctx.restore();
+                return;
+            } else if (c.type === 'aircraft') {
+                // Aircraft: NATO APP-6 fixed wing symbols
+                // Friendly = tombstone/arch, Enemy = pentagon/pointed top
+                size *= 1.4;
+                const acRot = Math.atan2(c.dy, c.dx) + Math.PI/2;
+                ctx.rotate(acRot);
+                
+                const isFr = isFriendlyColor(c.color);
+                // Proper aspect ratio: width ~60% of height (like reference NATO APP-6 chart)
+                const halfW = size * 0.45;
+                const totalH = halfW * 2.5;
+                const topY = -totalH / 2;
+                const botY = totalH / 2;
+                const archCY = topY + halfW; // arch center Y (arch radius = halfW)
+                
+                ctx.fillStyle = isFr ? '#7ee2ff' : '#ff7e7e';
+                ctx.lineWidth = 1.5 * currentMarkerScale;
+                
+                ctx.beginPath();
+                if (isFr) {
+                    // Friendly: Tombstone (rounded top, flat bottom)
+                    ctx.moveTo(-halfW, botY);
+                    ctx.lineTo(-halfW, archCY);
+                    ctx.arc(0, archCY, halfW, Math.PI, 0, false);
+                    ctx.lineTo(halfW, botY);
+                    ctx.closePath();
+                } else {
+                    // Hostile: Pentagon (pointed top, flat bottom)
+                    const shoulderY = topY + totalH * 0.35;
+                    ctx.moveTo(-halfW, botY);
+                    ctx.lineTo(-halfW, shoulderY);
+                    ctx.lineTo(0, topY);
+                    ctx.lineTo(halfW, shoulderY);
+                    ctx.lineTo(halfW, botY);
+                    ctx.closePath();
+                }
+                
+                ctx.fill();
+                ctx.stroke();
+                
+                // Letter centered inside shape body
+                const typeText = (c.icon || "Fighter").toLowerCase().includes("assault") ? "A" : "F";
+                ctx.fillStyle = '#000000';
+                ctx.font = `bold ${Math.round(halfW * 1.4)}px Arial`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                // Center in the rectangular body portion (between archCY/shoulderY and botY)
+                let bodyCenter = isFr ? (archCY + botY) / 2 : ((topY + totalH * 0.35) + botY) / 2;
+                if (isFr) bodyCenter -= size * 0.15;
+                ctx.fillText(typeText, 0, bodyCenter);
+                
+                ctx.rotate(-acRot);
+                
+            } else if (c.isBomberSpawn) {
+                // Bomber spawn marker
+                ctx.beginPath();
+                ctx.moveTo(0, -size);
+                ctx.lineTo(size, size);
+                ctx.lineTo(-size, size);
+                ctx.closePath();
+                ctx.fill();
+                ctx.stroke();
+                ctx.fillStyle = '#FFFFFF';
+            } else if (c.hasAmmo || c.hasFuel) {
+                // NATO APP-6 Installation (AmmoStorage / FuelStorage)
+                size = 26 * currentMarkerScale;
+                ctx.lineWidth = 1 * currentMarkerScale;
+
+                if (!isFriendly) {
+                    // NATO Hostile / Target: Red Diamond
+                    // Scaled to 0.8 to visually match the weight of the rectangle
+                    const dSize = size * 0.8;
+
+                    // 1. Installation Marker: Black SQUARE (Draw FIRST so it is BEHIND)
+                    const sqSize = size * 0.5; // Increased from 0.4
+                    ctx.fillStyle = '#000000';
+                    // Center of square = (0, -dSize)
+                    // Top-Left = (-sqSize/2, -dSize - sqSize/2)
+                    ctx.fillRect(-sqSize / 2, -dSize - sqSize / 2, sqSize, sqSize);
+
+                    ctx.beginPath();
+                    ctx.moveTo(0, -dSize);    // Top
+                    ctx.lineTo(dSize, 0);     // Right
+                    ctx.lineTo(0, dSize);     // Bottom
+                    ctx.lineTo(-dSize, 0);    // Left
+                    ctx.closePath();
+
+                    ctx.fillStyle = '#ff7e7e'; 
+                    ctx.fill();
+                    ctx.strokeStyle = '#000000'; // Black Outline
+                    ctx.stroke();
+
+                    // Installation label inside diamond
+                    let label = c.hasAmmo ? "AMMO" : "FUEL";
+                    ctx.fillStyle = '#000000';
+                    ctx.font = `bold ${8 * currentMarkerScale}px Arial`;
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText(label, 0, 0);
+
+                } else {
+                    // NATO Friendly: Blue Rectangle
+                    const rectW = size * 1.5;
+                    const rectH = size * 1.0;
+
+                    ctx.beginPath();
+                    ctx.rect(-rectW / 2, -rectH / 2, rectW, rectH);
+                    ctx.fillStyle = '#7ee2ff';
+                    ctx.fill();
+                    ctx.strokeStyle = '#000000'; // Black Outline
+                    ctx.stroke();
+
+                    // Installation Marker: Black RECTANGLE on top of Rectangle
+                    // "make the black retanlge for installtion smaller"
+                    const instW = rectW * 0.4; // Slightly increased
+                    const instH = size * 0.2;
+                    ctx.fillStyle = '#000000';
+                    // Positioned centrally above the top edge (-rectH/2)
+                    ctx.fillRect(-instW / 2, -rectH / 2 - instH, instW, instH);
+
+                    // Installation label inside rectangle
+                    let label = c.hasAmmo ? "AMMO" : "FUEL";
+                    ctx.fillStyle = '#000000';
+                    ctx.font = `bold ${8 * currentMarkerScale}px Arial`;
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText(label, 0, 0);
+                }
+            } else {
+                // ALL OTHER GROUND UNITS: Use standard NATO classifier
+                const nato = getNATOType(c);
+                if (c.hasSam) {
+                    nato.type = "SPAA-SAM";
+                } else if (c.hasAaa) {
+                    nato.type = "AAA";
+                }
+                const count = c.units.length;
+                let dots = 0;
+                let showCompanyLine = false;
+                const dominantCount = nato.dominantCount || 1;
+
+                if (count === 1) {
+                    dots = 1;
+                } else if (dominantCount === 2) {
+                    dots = 2;
+                } else if (dominantCount >= 3 && dominantCount <= 4) {
+                    dots = 3;
+                } else if (dominantCount >= 5) {
+                    showCompanyLine = true;
+                }
+                
+                ctx.restore(); // Pop the translation
+                drawNATOIcon(ctx, sx, sy, 26 * currentMarkerScale, unitColor, isFriendly, dots, nato.type, nato.af, nato.isReinforced);
+                
+                if (showCompanyLine) {
+                    ctx.save();
+                    ctx.translate(sx, sy);
+                    ctx.strokeStyle = '#000000';
+                    ctx.lineWidth = 2 * currentMarkerScale;
+                    const lineHeight = 10 * currentMarkerScale;
+                    const markerTop = isFriendly ? -(26 * currentMarkerScale * 1.0) / 2 : -(26 * currentMarkerScale * 0.8);
+                    const offsetFromTop = 4 * currentMarkerScale;
+                    const yPos = markerTop - offsetFromTop - lineHeight / 2;
+                    ctx.beginPath();
+                    ctx.moveTo(0, yPos - lineHeight / 2);
+                    ctx.lineTo(0, yPos + lineHeight / 2);
+                    ctx.stroke();
+                    ctx.restore();
+                }
+                
+                ctx.save();    // Push again to safely land out
+                ctx.translate(sx, sy);
+            }
+            
+            // DRAW CONVOY NUMBER (If Info Panel is enabled)
+            if (isConvoy && typeof showConvoyInfo !== 'undefined' && showConvoyInfo) {
+                let iconSize = 26 * currentMarkerScale;
+                const yOffset = (iconSize / 2) + (5 * currentMarkerScale);
+                
+                ctx.save();
+                // Context is already translated to (sx, sy) in current scope!
+                ctx.fillStyle = '#FFFFFF';
+                ctx.strokeStyle = '#000000';
+                ctx.lineWidth = 3;
+                ctx.font = `bold ${14 * currentMarkerScale}px Arial`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'top'; // Draw below the icon
+                
+                const label = `#${currentConvoyIndex + 1}`;
+                ctx.strokeText(label, 0, yOffset);
+                ctx.fillText(label, 0, yOffset);
+                ctx.restore();
+            }
+
+            ctx.restore();
+        });
+
+        // Inform the delayed Convoy Info Panel renderer of our NT ground unit clusters
+        if (typeof window !== 'undefined') {
+            window.activeNtClusters = clusters.filter(c => 
+                c.type !== 'aircraft' && 
+                c.type !== 'airfield' && 
+                c.type !== 'respawn_base_bomber'
+            );
+        }
+    }
+
     // Render Commander Markers (Fighters, etc.)
     if (lastData.commander && lastData.commander.markers) {
         lastData.commander.markers.forEach(m => {
@@ -2539,7 +2854,14 @@ function draw() {
     // 3. Draw Ground Units (Clustered) - BEFORE Players/POIs
     let clusters = []; // Define outside to allow panel update even if empty
 
-    if (lastData.ground_units && lastData.ground_units.length > 0) {
+    const isNuclearModeActive = (lastData && lastData.config && lastData.config.nuclear_thunder_mode);
+
+    if (isNuclearModeActive && typeof window !== 'undefined' && window.activeNtClusters) {
+        clusters = window.activeNtClusters; // Provide NT clusters so Convoy Panel works
+        window.activeNtClusters = null;     // Clear it out
+    }
+
+    if (lastData.ground_units && lastData.ground_units.length > 0 && !isNuclearModeActive) {
         // Separate Naval Units from Ground Units
         const groundUnits = [];
         const navalUnits = [];
@@ -2652,7 +2974,7 @@ function draw() {
     }
 
     // Draw Clusters (if any)
-    if (clusters.length > 0) {
+    if (clusters.length > 0 && !isNuclearModeActive) {
         clusters.forEach((c, idx) => {
             // if (engagedIndices.has(idx)) return; // Removed FEBA logic
 
@@ -3508,8 +3830,9 @@ function draw() {
             }
         }
 
-        // Trail
-        if (p.trail && p.trail.length > 0) {
+        // Trail (hidden in Nuclear Thunder mode)
+        const isNT = lastData && lastData.config && lastData.config.nuclear_thunder_mode;
+        if (!isNT && p.trail && p.trail.length > 0) {
             ctx.beginPath();
             ctx.strokeStyle = p.color || '#FFFFFF';
             ctx.lineWidth = 2;
@@ -3521,77 +3844,119 @@ function draw() {
             ctx.stroke();
         }
 
-        // Draw Arrow (like PC overlay)
+        // Draw Player Marker
         ctx.save();
         ctx.translate(sx, sy);
         ctx.rotate(rotation);
 
-        // Draw arrow shape with black outline
         const markerColor = p.color || '#FFFF00';
         const arrowSize = 12 * markerScale;
 
-        // Draw velocity vector if moving (starts from arrow tip, UNDER outline)
-        if (p.spd && p.spd > 10) {
-            const vectorLen = (p.spd * 0.05 * markerScale);  // Scale based on speed
-            ctx.save();
-            ctx.strokeStyle = markerColor;
-            ctx.lineWidth = 1.5 * markerScale;
+        if (isNT) {
+            // Nuclear Thunder: NATO APP-6 aircraft shapes
+            // Friendly = tombstone/arch, Enemy = pentagon/pointed top, letter inside
+            const ntFriendly = isFriendlyColor(p.color);
+            const halfW = arrowSize * 0.9;
+            const totalH = halfW * 2.5;
+            const topY = -totalH / 2;
+            const botY = totalH / 2;
+            const archCY = topY + halfW;
+            
+            ctx.fillStyle = markerColor;
+            ctx.strokeStyle = '#000000';
+            ctx.lineWidth = 2 * markerScale;
+            
             ctx.beginPath();
-            ctx.moveTo(arrowSize, 0);  // Start from arrow tip
-            ctx.lineTo(arrowSize + vectorLen, 0);  // Extend outward along X axis (forward)
+            if (ntFriendly) {
+                // Friendly: Tombstone (rounded top, flat bottom)
+                ctx.moveTo(-halfW, botY);
+                ctx.lineTo(-halfW, archCY);
+                ctx.arc(0, archCY, halfW, Math.PI, 0, false);
+                ctx.lineTo(halfW, botY);
+                ctx.closePath();
+            } else {
+                // Hostile: Pentagon (pointed top, flat bottom)
+                const shoulderY = topY + totalH * 0.35;
+                ctx.moveTo(-halfW, botY);
+                ctx.lineTo(-halfW, shoulderY);
+                ctx.lineTo(0, topY);
+                ctx.lineTo(halfW, shoulderY);
+                ctx.lineTo(halfW, botY);
+                ctx.closePath();
+            }
+            ctx.fill();
             ctx.stroke();
-            ctx.restore();
+            
+            // Letter centered in the body portion of the shape
+            ctx.fillStyle = '#000000';
+            ctx.font = `bold ${Math.round(halfW * 1.4)}px Arial`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            let bodyCenter = ntFriendly ? (archCY + botY) / 2 : ((topY + totalH * 0.35) + botY) / 2;
+            if (ntFriendly) bodyCenter -= halfW * 0.3;
+            ctx.fillText('F', 0, bodyCenter);
+        } else {
+            // Normal mode: arrow + velocity vector
+            if (p.spd && p.spd > 10) {
+                const vectorLen = (p.spd * 0.05 * markerScale);
+                ctx.save();
+                ctx.strokeStyle = markerColor;
+                ctx.lineWidth = 1.5 * markerScale;
+                ctx.beginPath();
+                ctx.moveTo(arrowSize, 0);
+                ctx.lineTo(arrowSize + vectorLen, 0);
+                ctx.stroke();
+                ctx.restore();
+            }
+
+            ctx.beginPath();
+            ctx.moveTo(arrowSize, 0);
+            ctx.lineTo(-arrowSize / 3, -arrowSize / 2);
+            ctx.lineTo(-arrowSize / 3, arrowSize / 2);
+            ctx.closePath();
+
+            ctx.strokeStyle = '#000000';
+            ctx.lineWidth = 5 * markerScale;
+            ctx.stroke();
+
+            ctx.strokeStyle = markerColor;
+            ctx.lineWidth = 2.5 * markerScale;
+            ctx.stroke();
         }
-
-        // Draw arrow path (Must be defined AFTER velocity vector, as vector drawing clears path)
-        ctx.beginPath();
-        ctx.moveTo(arrowSize, 0);           // tip
-        ctx.lineTo(-arrowSize / 3, -arrowSize / 2);     // back left
-        ctx.lineTo(-arrowSize / 3, arrowSize / 2);      // back right
-        ctx.closePath();
-
-        // First pass: Black outline (thicker)
-        ctx.strokeStyle = '#000000';
-        ctx.lineWidth = 5 * markerScale;
-        ctx.stroke();
-
-        // Second pass: Colored stroke (thinner)
-        ctx.strokeStyle = markerColor;
-        ctx.lineWidth = 2.5 * markerScale;
-        ctx.stroke();
 
         // Rotate back for text
         ctx.rotate(-rotation);
 
-        // Callsign text (already rotated back to upright)
-        ctx.fillStyle = '#FFF';
-        ctx.strokeStyle = '#000000';
-        ctx.lineWidth = 3 * markerScale;
-        ctx.font = `bold ${12 * markerScale}px Arial`; // Standardized
-        ctx.textAlign = 'center'; // Explicitly center
-        const callsign = p.callsign || 'Unknown';
+        // Callsign text (hidden in Nuclear Thunder mode)
+        if (!isNT) {
+            ctx.fillStyle = '#FFF';
+            ctx.strokeStyle = '#000000';
+            ctx.lineWidth = 3 * markerScale;
+            ctx.font = `bold ${12 * markerScale}px Arial`;
+            ctx.textAlign = 'center';
+            const callsign = p.callsign || 'Unknown';
 
-        ctx.strokeText(callsign, 0, -20 * markerScale);
-        ctx.fillText(callsign, 0, -20 * markerScale); // Adjusted offset
+            ctx.strokeText(callsign, 0, -20 * markerScale);
+            ctx.fillText(callsign, 0, -20 * markerScale);
+        }
 
-        // Altitude and Speed BELOW the marker arrow
-        // Format matches PC overlay: "speed altitude" (no units)
-        // Position text below the arrow tip (positive Y)
+        // Altitude and Speed BELOW the marker (always shown)
         if (p.alt !== undefined || p.spd !== undefined) {
-            ctx.font = `bold ${12 * markerScale}px Arial`;  // Standardized
-            ctx.fillStyle = '#FFFFFF';  // White text
-            ctx.textAlign = 'center'; // Explicitly center
+            ctx.font = `bold ${12 * markerScale}px Arial`;
+            ctx.fillStyle = '#FFFFFF';
+            ctx.strokeStyle = '#000000';
+            ctx.lineWidth = 3 * markerScale;
+            ctx.textAlign = 'center';
 
-            const altKm = (p.alt / 1000).toFixed(1);  // 1 decimal like PC
-            // Apply unit conversion like PC overlay
+            const altKm = (p.alt / 1000).toFixed(1);
             let spdDisplay = p.spd;
             if (lastData.config && lastData.config.unit_is_kts) {
-                spdDisplay = p.spd * 0.539957;  // Convert km/h to knots
+                spdDisplay = p.spd * 0.539957;
             }
-            const statsText = `${Math.round(spdDisplay)} ${altKm}`;  // Speed first, like PC overlay
+            const statsText = `${Math.round(spdDisplay)} ${altKm}`;
 
             ctx.strokeText(statsText, 0, 28 * markerScale);
-            ctx.fillText(statsText, 0, 28 * markerScale);  // Adjusted offset
+            ctx.fillText(statsText, 0, 28 * markerScale);
         }
 
 

@@ -6,7 +6,7 @@ import json
 import os
 
 # Version Tag
-VERSION_TAG = "v1.8.1"
+VERSION_TAG = "v1.8.2"
 
 # Load Configuration
 try:
