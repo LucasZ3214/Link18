@@ -1192,6 +1192,10 @@ class RenderingMixin:
             raw_x, raw_y = unit['x'], unit['y']
             if raw_x is None or raw_y is None: continue
             
+            # Do not draw aircraft in classic mode unless wanted, I will skip them
+            if unit.get('type') == 'aircraft' or unit.get('type') == 'respawn_base_bomber':
+                continue
+            
             x = CONFIG.get('map_offset_x', 0) + (raw_x * CONFIG.get('map_width', 800))
             y = CONFIG.get('map_offset_y', 0) + (raw_y * CONFIG.get('map_height', 800))
 
@@ -1199,12 +1203,14 @@ class RenderingMixin:
             painter.translate(x, y)
 
             color_str = str(unit.get('color', '#FF0000'))
+            if len(color_str) == 9 and color_str.startswith('#'): color_str = color_str[:7]
             color = QColor(color_str)
             painter.setPen(QPen(color, 1))
             painter.setBrush(QBrush(color))
 
             icon = (unit.get('icon') or '').lower()
-            size = 6 * self.marker_scale
+            from PyQt6.QtCore import QRectF, QPointF
+            size = 6 * getattr(self, 'marker_scale', 1.0)
 
             if 'aa' in icon or 'spaa' in icon or 'sam' in icon:
                  # AA: Box with cross
@@ -1368,6 +1374,7 @@ class RenderingMixin:
     # Velocity Vector / Flight Path Marker
     # ─────────────────────────────────────────────
 
+
     def _draw_velocity_vector(self, painter, screen_w, screen_h):
         """
         Draws the velocity vector (FPM) based on AoA, AoS, and Roll.
@@ -1395,33 +1402,20 @@ class RenderingMixin:
         # 2. Extract telemetry
         alpha = getattr(self, 'current_aoa', 0.0) # Pitch offset in deg
         beta = getattr(self, 'current_aos', 0.0)  # Yaw offset in deg
-        roll = getattr(self, 'current_roll', 0.0) # HUD roll
 
         # Clamp extreme values so the FPM doesn't violently leave the screen
         alpha = max(-45.0, min(45.0, alpha))
         beta = max(-45.0, min(45.0, beta))
 
-        # Calculate Offset in Pixels
+        # Calculate Offset in Pixels (screen-space, consistent with game camera view)
         offset_y = alpha * current_fov_scale
-        offset_x = -beta * current_fov_scale # Beta is positive when slipping right, so we move FPM left to match the nose pointing right relative to flight path. 
+        offset_x = -beta * current_fov_scale
 
-        center_x = screen_w / 2.0
-        center_y = screen_h / 2.0
-        
-        # Apply Roll Rotation matrix to the offset vector
-        roll_rad = math.radians(roll)
-        
-        # FPM moves relative to aircraft roll.
-        # This rotation ensures that when banking 90 deg, a positive AoA moves the FPM horizontally.
-        rx = offset_x * math.cos(roll_rad) - offset_y * math.sin(roll_rad)
-        ry = offset_x * math.sin(roll_rad) + offset_y * math.cos(roll_rad)
-        
-        final_x = center_x + rx
-        final_y = center_y + ry
+        final_x = screen_w / 2.0 + offset_x
+        final_y = screen_h / 2.0 + offset_y
 
         painter.save()
         painter.translate(final_x, final_y)
-        painter.rotate(roll) # The symbol itself rotates with the aircraft
 
         # 3. Draw FPM Symbol
         # Classic FPM: Circle with 3 ticks (Left wing, right wing, top fin)

@@ -584,6 +584,12 @@ class OverlayWindow(RenderingMixin, GbuHudMixin, QWidget):
                     print(f"[CMD] Formation Mode set to: {val}")
                     self.update()
 
+                elif cmd_type == 'set_nuclear_thunder':
+                    val = cmd.get('value', False)
+                    CONFIG['nuclear_thunder_mode'] = val
+                    print(f"[CMD] Nuclear Thunder Mode set to: {val}")
+                    self.update()
+
                 elif cmd.get('type') == 'planning_update':
                     self.planning_waypoints = cmd.get('waypoints', [])
                     print(f"[PLAN] Updated {len(self.planning_waypoints)} waypoints from Web UI")
@@ -968,7 +974,8 @@ class OverlayWindow(RenderingMixin, GbuHudMixin, QWidget):
                 self.shared_data['config'] = {
                     'callsign': CONFIG.get('callsign', 'Pilot'),
                     'color': CONFIG.get('color', '#FF0000'),
-                    'version': VERSION_TAG
+                    'version': VERSION_TAG,
+                    'nuclear_thunder_mode': CONFIG.get('nuclear_thunder_mode', False)
                 }
         except Exception as e:
             print(f"[NET] Telemetry process error: {e}")
@@ -1025,10 +1032,18 @@ class OverlayWindow(RenderingMixin, GbuHudMixin, QWidget):
                     'type': otype, 'color': obj.get('color'),
                     'blink': obj.get('blink', 0)
                 })
-            elif otype in ['ground_unit', 'ground_model', 'transport', 'armoured', 'tank', 'artillery']:
+            elif otype in ['ground_unit', 'ground_model', 'transport', 'armoured', 'tank', 'artillery', 'aircraft']:
                 self.map_ground_units.append({
                     'x': obj.get('x'), 'y': obj.get('y'),
-                    'icon': obj.get('icon'), 'color': obj.get('color')
+                    'dx': obj.get('dx', 0), 'dy': obj.get('dy', 0),
+                    'icon': obj.get('icon'), 'color': obj.get('color'),
+                    'type': otype
+                })
+            elif otype == 'respawn_base_bomber':
+                self.map_ground_units.append({
+                    'x': obj.get('x'), 'y': obj.get('y'),
+                    'icon': 'respawn_base_bomber', 'color': obj.get('color'),
+                    'type': otype
                 })
 
         # Detect airfields

@@ -103,7 +103,8 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                     'rwr_threats': SHARED_DATA.get('rwr_threats', []),
                     'config': {
                         'unit_is_kts': CONFIG.get('unit_is_kts', True),  # Speed unit setting
-                        'web_marker_scale': CONFIG.get('web_marker_scale', 2.3)  # Manual scaling factor
+                        'web_marker_scale': CONFIG.get('web_marker_scale', 2.3),  # Manual scaling factor
+                        'nuclear_thunder_mode': SHARED_DATA.get('config', {}).get('nuclear_thunder_mode', False)
                     },
                     'status': SHARED_DATA.get('status')
                 }

@@ -303,9 +303,9 @@ def _ocr_contact(mask, contact, image_center, image_radius, image=None):
     if best_label == 'UNK' and _char_templates:
         best_label = _ocr_by_chars(crop)
 
-    # Auto-save unknown contacts as template candidates
-    if best_label == 'UNK' and crop is not None:
-        _auto_save_template(crop)
+    # Auto-save disabled
+    # if best_label == 'UNK' and crop is not None:
+    #     _auto_save_template(crop)
 
     return best_label
 
@@ -367,7 +367,7 @@ def _ocr_by_chars(crop):
         h, w = char_blob.shape
         scale = min(8.0/w, 14.0/h) if (w > 8 or h > 14) else 1.0
         if scale < 1.0:
-            resized = cv2.resize(char_blob, (int(w*scale), int(h*scale)), interpolation=cv2.INTER_AREA)
+            resized = cv2.resize(char_blob, (max(1, int(w*scale)), max(1, int(h*scale))), interpolation=cv2.INTER_AREA)
         else:
             resized = char_blob
         
@@ -390,24 +390,8 @@ def _ocr_by_chars(crop):
         if best_char != '?':
             recognized += best_char
         else:
-            # SAVE UNKNOWN CHARACTER BOLD BLOB
-            # Only save if it has enough content to be a character (not just noise)
-            if cv2.countNonZero(processed_blob) > 5:
-                ts = int(time.time() * 1000) % 1000000
-                unkn_path = os.path.join(_CHARS_DIR, f"unknown_{ts}.png")
-                # Deduplication logic: check if we already saved a similar unknown
-                already_saved = False
-                for existing in os.listdir(_CHARS_DIR):
-                    if existing.startswith("unknown_") and existing.endswith(".png"):
-                        ex_img = cv2.imread(os.path.join(_CHARS_DIR, existing), cv2.IMREAD_GRAYSCALE)
-                        if ex_img is not None and ex_img.shape == processed_blob.shape:
-                            sim = cv2.matchTemplate(processed_blob, ex_img, cv2.TM_CCOEFF_NORMED)
-                            if cv2.minMaxLoc(sim)[1] > 0.9:
-                                already_saved = True
-                                break
-                if not already_saved:
-                    cv2.imwrite(unkn_path, processed_blob)
-                    print(f"[RWR] Unrecognized char saved: {unkn_path}")
+            # Auto-save of unknown chars disabled
+            pass
 
     return recognized if len(recognized) >= 1 else 'UNK'
 
@@ -434,6 +418,8 @@ def _auto_save_template(crop):
         # Resize to same shape for comparison
         if existing.shape != crop.shape:
             try:
+                if crop.shape[0] < 1 or crop.shape[1] < 1:
+                    continue
                 existing = cv2.resize(existing, (crop.shape[1], crop.shape[0]))
             except:
                 continue

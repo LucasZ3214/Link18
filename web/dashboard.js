@@ -3862,8 +3862,10 @@ function draw() {
         const arrowSize = 12 * markerScale;
 
         if (isNT) {
+            // Align the Upwards-facing NATO shapes with standard 0-radian Right-facing rotation
+            ctx.rotate(Math.PI / 2);
+            
             // Nuclear Thunder: NATO APP-6 aircraft shapes
-            // Friendly = tombstone/arch, Enemy = pentagon/pointed top, letter inside
             const ntFriendly = isFriendlyColor(p.color);
             const halfW = arrowSize * 0.9;
             const totalH = halfW * 2.5;
@@ -3904,6 +3906,9 @@ function draw() {
             let bodyCenter = ntFriendly ? (archCY + botY) / 2 : ((topY + totalH * 0.35) + botY) / 2;
             if (ntFriendly) bodyCenter -= halfW * 0.3;
             ctx.fillText('F', 0, bodyCenter);
+            
+            // Undo the NATO shape rotation offset so that text below is not rotated by 90 degrees
+            ctx.rotate(-Math.PI / 2);
         } else {
             // Normal mode: arrow + velocity vector
             if (p.spd && p.spd > 10) {
